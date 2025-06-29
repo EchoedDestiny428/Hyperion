@@ -1,5 +1,5 @@
-#include "main.hpp"
-
+#include "main.h"
+using namespace std;
 
 int main() {
     cout <<  "Hello World" << endl;
