@@ -1,8 +1,5 @@
-#include <iostream>
-#include <vector>
-#include <string>
+#include <include/pch.h>
 
-using namespace std;
 
 int main() {
     cout <<  "Hello World" << endl;
