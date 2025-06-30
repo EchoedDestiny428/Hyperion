@@ -5,4 +5,12 @@
 
 #include "main.hpp"
 
+class Hyperion {
+    public:
+        void initialize();
+        void data_input();
+
+    private:
+};
+
 #endif
