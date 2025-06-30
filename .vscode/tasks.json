@@ -8,7 +8,9 @@
                 "-Iinclude",
                 "${file}",
                 "-o",
-                "${workspaceFolder}\\${fileBasenameNoExtension}.exe"
+                "${workspaceFolder}\\${fileBasenameNoExtension}.exe",
+                "${hyperion}",
+                "${input_manager}"
             ],
             "options": {
                 "cwd": "${fileDirname}"

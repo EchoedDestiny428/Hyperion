@@ -1,4 +1,4 @@
-#include "../include/hyperion.hpp"
+#include "../include/pch.hpp"
 
 
 
@@ -8,10 +8,8 @@ class Hyperion {
             cout <<  "Hyperion Initialized." << endl;
             cin.get();
         }
-        void data_input() {
 
-        }
-    
+        void data_input() {}
 
     private:
 };
