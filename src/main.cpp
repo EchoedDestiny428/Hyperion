@@ -3,7 +3,10 @@
 using namespace std;
 
 int main() {
-    cout <<  "Hello World" << endl;
+    cout <<  "Hyperion Initialized." << endl;
+
+
+    
     cin.get();
 
     return 0;

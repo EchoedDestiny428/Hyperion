@@ -2,9 +2,9 @@
 
 
 
-class Input {
+class Hyperion {
     public:
-        void train() {
+        void data_input() {
             
         }
     
