@@ -1,4 +1,4 @@
-#include "../include/input_manager.h"
+#include "../include/input_manager.hpp"
 
 
 class InputManager {

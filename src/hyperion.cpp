@@ -1,4 +1,4 @@
-#include "../include/hyperion.h"
+#include "../include/hyperion.hpp"
 
 
 class Hyperion {
