@@ -1,0 +1,23 @@
+{
+  "name": "hyperion",
+  "private": true,
+  "version": "0.0.0",
+  "description": "WebGPU tech demo: real-time path tracing and fast-loading scenes in the browser.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.12"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "test": "node --test \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/web": "0.0.359",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

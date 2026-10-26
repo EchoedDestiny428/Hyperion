@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hyperion</title>
+    <!-- An empty icon, so the browser doesn't request /favicon.ico and log a 404. -->
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="view" aria-label="Real-time ray-traced scene. Drag to orbit, scroll to zoom."></canvas>
+    <pre id="hud" hidden></pre>
+    <div id="message" role="alert" hidden></div>
+    <noscript>Hyperion needs JavaScript and WebGPU to run.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

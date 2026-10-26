@@ -1,0 +1,70 @@
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+#view {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Let pointer events drive the camera on touch screens instead of the
+     browser scrolling or zooming the page. */
+  touch-action: none;
+  cursor: grab;
+}
+
+#view:active {
+  cursor: grabbing;
+}
+
+#hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 55%);
+  color: #e8ecf1;
+  font: 12px/1.5 ui-monospace, Consolas, monospace;
+  pointer-events: none; /* clicks go through to the canvas */
+}
+
+#message {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  padding: 24px;
+  background: #0b0d12;
+  color: #e8ecf1;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+
+/* `display` above would otherwise override the hidden attribute. */
+#hud[hidden],
+#message[hidden] {
+  display: none;
+}
+
+#message .card {
+  max-width: 640px;
+}
+
+#message h1 {
+  margin: 0 0 12px;
+  font-size: 22px;
+}
+
+#message .details {
+  color: #8b95a5;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
