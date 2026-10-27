@@ -37,6 +37,23 @@ body {
   pointer-events: none; /* clicks go through to the canvas */
 }
 
+/* Bottom-left, so it can't overlap the HUD on narrow screens. */
+#scene-picker {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 55%);
+  color: #e8ecf1;
+  font: 12px/1.5 ui-monospace, Consolas, monospace;
+}
+
+#scene-picker select {
+  margin-left: 6px;
+  font: inherit;
+}
+
 #message {
   position: fixed;
   inset: 0;

@@ -27,6 +27,10 @@ npm run dev        # then open the printed http://localhost:5173 URL
 
 To preview the "can't run here" messages, add `?simulate=no-webgpu`, `?simulate=no-adapter` or `?simulate=insecure` to the URL.
 
+## Scenes
+
+Pick a scene layout from the menu in the bottom-left corner, or open one directly with `?scene=ball-test-1`. Layouts are plain data in [`src/scene/layouts/`](src/scene/layouts/). To add one, create a file there and list it in `src/scene/registry.ts`.
+
 ## License
 
 The code is under the [MIT License](LICENSE). Third-party assets added in later milestones keep their own licenses, which will be listed with attribution.

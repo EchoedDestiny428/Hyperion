@@ -33,6 +33,43 @@ fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 }
 
 // ---- Scene ---------------------------------------------------------------
+// The layout comes from the CPU (packScene() in scene/scene.ts), so this one
+// shader can draw any scene. These structs must match what packScene() writes.
+// https://www.w3.org/TR/WGSL/#alignment-and-size
+
+struct SceneInfo {
+  sphereCount: u32,
+  groundMaterial: u32, // index into materials
+  _pad: vec2u,
+}
+
+struct Sphere {
+  center: vec3f,
+  radius: f32,
+  material: u32, // index into materials
+  // WGSL pads this struct from 20 to 32 bytes: a struct holding a vec3f is
+  // aligned to 16 bytes, and its size rounds up to match.
+}
+
+// Material kinds. Must match MATERIAL_KIND in scene/scene.ts (scene.test.ts checks).
+const KIND_DIFFUSE = 0u; // matte, colored by colorA
+const KIND_MIRROR = 1u; // perfect reflection, tinted by colorA
+const KIND_CHECKER = 2u; // matte squares of colorA and colorB, cellSize meters wide
+
+struct Material {
+  colorA: vec3f,
+  kind: u32,
+  colorB: vec3f,
+  cellSize: f32,
+}
+
+// A uniform buffer is small and fixed-size. Storage buffers can be large, and
+// an array in one needs no fixed length (array<Sphere>, not array<Sphere, 5>),
+// so the same shader handles any number of objects.
+@group(0) @binding(1) var<uniform> scene: SceneInfo;
+@group(0) @binding(2) var<storage, read> spheres: array<Sphere>;
+@group(0) @binding(3) var<storage, read> materials: array<Material>;
+
 struct Ray {
   origin: vec3f,
   dir: vec3f, // unit length
@@ -42,7 +79,7 @@ struct Hit {
   t: f32, // distance along the ray, or NO_HIT
   position: vec3f,
   normal: vec3f, // unit length, pointing out of the surface
-  material: u32,
+  material: u32, // index into materials
 }
 
 const NO_HIT = 1e30;
@@ -50,35 +87,15 @@ const NO_HIT = 1e30;
 // a ray immediately re-hit the surface it left ("shadow acne").
 const EPSILON = 1e-3;
 
-const MAT_GROUND = 0u;
-const MAT_RED = 1u;
-const MAT_BLUE = 2u;
-const MAT_MIRROR = 3u;
-const MAT_GOLD = 4u;
-
-const SPHERE_COUNT = 5u;
-// xyz = center, w = radius. Private variables are per-invocation copies;
-// here they serve as small lookup tables.
-var<private> spheres: array<vec4f, SPHERE_COUNT> = array<vec4f, SPHERE_COUNT>(
-  vec4f(0.0, 1.0, 0.0, 1.0),
-  vec4f(-2.3, 0.7, 0.9, 0.7),
-  vec4f(2.1, 0.8, -0.7, 0.8),
-  vec4f(1.0, 0.4, 2.0, 0.4),
-  vec4f(-1.2, 0.5, -2.2, 0.5),
-);
-var<private> sphereMaterials: array<u32, SPHERE_COUNT> = array<u32, SPHERE_COUNT>(
-  MAT_MIRROR, MAT_RED, MAT_GOLD, MAT_BLUE, MAT_RED,
-);
-
 const SUN_COLOR = vec3f(1.6, 1.52, 1.36); // brighter than 1: tone mapping handles it
 
 // ---- Intersection --------------------------------------------------------
-fn intersectSphere(ray: Ray, sphere: vec4f) -> f32 {
+fn intersectSphere(ray: Ray, sphere: Sphere) -> f32 {
   // Solve |origin + t*dir - center|² = r² for t. Because |dir| = 1 this is
   // t² + 2bt + c = 0 with b = dot(oc, dir), c = |oc|² - r².
-  let oc = ray.origin - sphere.xyz;
+  let oc = ray.origin - sphere.center;
   let b = dot(oc, ray.dir);
-  let c = dot(oc, oc) - sphere.w * sphere.w;
+  let c = dot(oc, oc) - sphere.radius * sphere.radius;
   let discriminant = b * b - c;
   if (discriminant < 0.0) {
     return NO_HIT; // the ray's line misses the sphere entirely
@@ -103,19 +120,20 @@ fn intersectGround(ray: Ray) -> f32 {
   return select(NO_HIT, t, t > EPSILON);
 }
 
-// Finds the closest thing the ray hits, by testing every object. Fine for six
-// objects; a real scene needs an acceleration structure (a BVH, Act 2).
+// Finds the closest thing the ray hits, by testing every object. Fine for a
+// handful of objects; a real scene needs an acceleration structure (a BVH, Act 2).
 fn intersectScene(ray: Ray) -> Hit {
   var hit: Hit;
   hit.t = intersectGround(ray);
   hit.normal = vec3f(0.0, 1.0, 0.0);
-  hit.material = MAT_GROUND;
-  for (var i = 0u; i < SPHERE_COUNT; i++) {
-    let t = intersectSphere(ray, spheres[i]);
+  hit.material = scene.groundMaterial;
+  for (var i = 0u; i < scene.sphereCount; i++) {
+    let sphere = spheres[i];
+    let t = intersectSphere(ray, sphere);
     if (t < hit.t) {
       hit.t = t;
-      hit.normal = normalize(ray.origin + t * ray.dir - spheres[i].xyz);
-      hit.material = sphereMaterials[i];
+      hit.normal = normalize(ray.origin + t * ray.dir - sphere.center);
+      hit.material = sphere.material;
     }
   }
   hit.position = ray.origin + hit.t * ray.dir;
@@ -145,23 +163,14 @@ fn inShadow(position: vec3f, normal: vec3f, toSun: vec3f) -> bool {
   return intersectScene(shadowRay).t < NO_HIT;
 }
 
-fn diffuseAlbedo(hit: Hit) -> vec3f {
-  var albedo = vec3f(0.5);
-  switch hit.material {
-    case MAT_GROUND: {
-      // 1 m checkerboard: the parity of the integer cell coordinates.
-      let cell = vec2i(floor(hit.position.xz));
-      albedo = select(vec3f(0.8), vec3f(0.12), ((cell.x + cell.y) & 1) == 1);
-    }
-    case MAT_RED: {
-      albedo = vec3f(0.75, 0.05, 0.04);
-    }
-    case MAT_BLUE: {
-      albedo = vec3f(0.03, 0.08, 0.6);
-    }
-    default: {}
+fn diffuseAlbedo(material: Material, position: vec3f) -> vec3f {
+  if (material.kind == KIND_CHECKER) {
+    // Squares cellSize wide: the parity of the integer square coordinates
+    // picks the color.
+    let cell = vec2i(floor(position.xz / material.cellSize));
+    return select(material.colorA, material.colorB, ((cell.x + cell.y) & 1) == 1);
   }
-  return albedo;
+  return material.colorA;
 }
 
 const MAX_BOUNCES = 4;
@@ -179,10 +188,10 @@ fn trace(primary: Ray) -> vec3f {
       return throughput * sky(ray.dir, toSun);
     }
 
-    if (hit.material == MAT_MIRROR || hit.material == MAT_GOLD) {
+    let material = materials[hit.material];
+    if (material.kind == KIND_MIRROR) {
       // Perfect mirror: reflect the direction about the normal and continue.
-      let tint = select(vec3f(0.95), vec3f(1.0, 0.78, 0.34), hit.material == MAT_GOLD);
-      throughput *= tint;
+      throughput *= material.colorA; // the tint
       ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
       continue;
     }
@@ -198,7 +207,7 @@ fn trace(primary: Ray) -> vec3f {
     // and from other surfaces is faked with a constant "ambient" term.
     // C1's path tracer computes it for real.
     let ambient = vec3f(0.16, 0.2, 0.28) * (0.5 + 0.5 * hit.normal.y);
-    var surface = diffuseAlbedo(hit) * (direct + ambient);
+    var surface = diffuseAlbedo(material, hit.position) * (direct + ambient);
     // Fade distant surfaces into the sky color. This hides the checkerboard
     // flickering near the horizon, since there's no anti-aliasing yet (C1).
     surface = mix(surface, sky(ray.dir, toSun), 1.0 - exp(-hit.t * 0.012));
