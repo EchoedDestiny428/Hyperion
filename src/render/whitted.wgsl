@@ -14,12 +14,39 @@ struct Frame {
   cameraUp: vec3f,
   time: f32,
   cameraForward: vec3f,
-  _pad0: f32,
+  layers: u32, // bit flags: which LAYER_* are on
   resolution: vec2f,
-  _pad1: vec2f,
+  view: u32, // one of VIEW_*
+  _pad: f32,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
+
+// ---- Layers and views ----------------------------------------------------
+// Switches for seeing what each part of the shader contributes, set from the
+// Layers panel. Must match LAYER_BITS and VIEWS in layers.ts (layers.test.ts checks).
+const LAYER_SUN = 1u; // direct sunlight
+const LAYER_SHADOWS = 2u; // shadow rays; off, the sun shines through objects
+const LAYER_AMBIENT = 4u; // the fake fill light
+const LAYER_COLOR = 8u; // material colors; off, every surface is grey
+const LAYER_REFLECTIONS = 16u; // mirror bounces; off, mirrors are matte
+const LAYER_FOG = 32u; // distant surfaces fade into the sky
+const LAYER_SKY = 64u; // off, rays that hit nothing return black
+const LAYER_TONE_MAP = 128u; // off, brightness above 1 clips to white
+const LAYER_SRGB = 256u; // off, linear light goes to the screen unconverted
+
+fn layerOn(layer: u32) -> bool {
+  return (frame.layers & layer) != 0u;
+}
+
+// The views other than VIEW_FINAL output false color: display values that
+// show one ingredient of the image, not light.
+const VIEW_FINAL = 0u;
+const VIEW_COLOR = 1u;
+const VIEW_NORMALS = 2u;
+const VIEW_DISTANCE = 3u;
+const VIEW_SUNLIGHT = 4u;
+const VIEW_RAYS = 5u;
 
 // ---- Full-screen triangle ------------------------------------------------
 // One triangle with corners (-1,-1), (3,-1), (-1,3) covers all of clip space
@@ -158,12 +185,27 @@ fn sky(dir: vec3f, toSun: vec3f) -> vec3f {
   return color;
 }
 
+// What a ray sees when it hits nothing.
+fn background(dir: vec3f, toSun: vec3f) -> vec3f {
+  if (!layerOn(LAYER_SKY)) {
+    return vec3f(0.0);
+  }
+  return sky(dir, toSun);
+}
+
+// The sun is a direction, not a point: it's so far away that all shadow rays
+// are parallel, and anything the ray hits counts as blocking it.
 fn inShadow(position: vec3f, normal: vec3f, toSun: vec3f) -> bool {
   let shadowRay = Ray(position + normal * EPSILON, toSun);
   return intersectScene(shadowRay).t < NO_HIT;
 }
 
-fn diffuseAlbedo(material: Material, position: vec3f) -> vec3f {
+// The color a surface reflects: a matte surface's albedo, or a mirror's tint.
+fn surfaceColor(material: Material, position: vec3f) -> vec3f {
+  if (!layerOn(LAYER_COLOR)) {
+    // Plain grey "clay", which shows the lighting on its own.
+    return select(vec3f(0.7), vec3f(0.9), material.kind == KIND_MIRROR);
+  }
   if (material.kind == KIND_CHECKER) {
     // Squares cellSize wide: the parity of the integer square coordinates
     // picks the color.
@@ -171,6 +213,30 @@ fn diffuseAlbedo(material: Material, position: vec3f) -> vec3f {
     return select(material.colorA, material.colorB, ((cell.x + cell.y) & 1) == 1);
   }
   return material.colorA;
+}
+
+// VIEW_SUNLIGHT: the two ways a point can miss the sun. It ignores the layer
+// switches, so it always shows where the scene's shadows really fall.
+fn sunlightView(hit: Hit, toSun: vec3f) -> vec3f {
+  if (dot(hit.normal, toSun) <= 0.0) {
+    return vec3f(0.1, 0.15, 0.45); // blue: faces away from the sun, so no shadow ray is needed
+  }
+  if (inShadow(hit.position, hit.normal, toSun)) {
+    return vec3f(1.0, 0.45, 0.1); // orange: the shadow ray hit something (a cast shadow)
+  }
+  return vec3f(1.0); // white: the sun reaches it
+}
+
+// VIEW_RAYS: 1 ray blue, 2 teal, 3 green, 4 yellow, 5 red.
+fn heat(rays: u32) -> vec3f {
+  var palette = array<vec3f, 5>(
+    vec3f(0.05, 0.1, 0.5),
+    vec3f(0.0, 0.55, 0.65),
+    vec3f(0.15, 0.7, 0.2),
+    vec3f(0.95, 0.8, 0.1),
+    vec3f(0.9, 0.15, 0.1),
+  );
+  return palette[clamp(rays, 1u, 5u) - 1u];
 }
 
 const MAX_BOUNCES = 4;
@@ -181,39 +247,95 @@ fn trace(primary: Ray) -> vec3f {
   // How much of the light found further along reaches the camera. Starts at
   // 1 and is reduced by each mirror bounce (no mirror is perfect).
   var throughput = vec3f(1.0);
+  var rays = 0u; // rays traced for this pixel so far, for VIEW_RAYS
+  var travelled = 0.0; // total path length so far, for VIEW_DISTANCE
 
   for (var bounce = 0; bounce < MAX_BOUNCES; bounce++) {
     let hit = intersectScene(ray);
+    rays++;
     if (hit.t >= NO_HIT) {
-      return throughput * sky(ray.dir, toSun);
+      switch frame.view {
+        case VIEW_FINAL, VIEW_COLOR: {
+          return throughput * background(ray.dir, toSun);
+        }
+        case VIEW_RAYS: {
+          return heat(rays);
+        }
+        default: {
+          return vec3f(0.0);
+        }
+      }
     }
+    travelled += hit.t;
 
     let material = materials[hit.material];
-    if (material.kind == KIND_MIRROR) {
+    if (material.kind == KIND_MIRROR && layerOn(LAYER_REFLECTIONS)) {
       // Perfect mirror: reflect the direction about the normal and continue.
-      throughput *= material.colorA; // the tint
+      throughput *= surfaceColor(material, hit.position); // the tint
       ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
       continue;
     }
 
-    // Matte surface. Lambert's cosine law: light arriving at a grazing angle
-    // spreads over more area, so the surface looks dimmer.
+    // A matte surface (or a mirror, with reflections off): the path ends here.
+    let albedo = surfaceColor(material, hit.position);
+
+    // Sunlight. Lambert's cosine law: light arriving at a grazing angle
+    // spreads over more area, so the surface looks dimmer. A surface facing
+    // away from the sun (cosine 0) gets none, so it needs no shadow ray.
     let cosine = max(dot(hit.normal, toSun), 0.0);
     var direct = vec3f(0.0);
-    if (cosine > 0.0 && !inShadow(hit.position, hit.normal, toSun)) {
-      direct = SUN_COLOR * cosine;
+    if (layerOn(LAYER_SUN) && cosine > 0.0) {
+      var blocked = false;
+      if (layerOn(LAYER_SHADOWS)) {
+        blocked = inShadow(hit.position, hit.normal, toSun);
+        rays++;
+      }
+      if (!blocked) {
+        direct = SUN_COLOR * cosine;
+      }
     }
+
     // Whitted ray tracing has no bounce light, so light arriving from the sky
     // and from other surfaces is faked with a constant "ambient" term.
     // C1's path tracer computes it for real.
-    let ambient = vec3f(0.16, 0.2, 0.28) * (0.5 + 0.5 * hit.normal.y);
-    var surface = diffuseAlbedo(material, hit.position) * (direct + ambient);
-    // Fade distant surfaces into the sky color. This hides the checkerboard
-    // flickering near the horizon, since there's no anti-aliasing yet (C1).
-    surface = mix(surface, sky(ray.dir, toSun), 1.0 - exp(-hit.t * 0.012));
-    return throughput * surface;
+    var ambient = vec3f(0.0);
+    if (layerOn(LAYER_AMBIENT)) {
+      ambient = vec3f(0.16, 0.2, 0.28) * (0.5 + 0.5 * hit.normal.y);
+    }
+
+    var surface = albedo * (direct + ambient);
+    if (layerOn(LAYER_FOG)) {
+      // Fade distant surfaces into the sky color. This hides the checkerboard
+      // flickering near the horizon, since there's no anti-aliasing yet (C1).
+      surface = mix(surface, background(ray.dir, toSun), 1.0 - exp(-hit.t * 0.012));
+    }
+
+    switch frame.view {
+      case VIEW_COLOR: {
+        return throughput * albedo;
+      }
+      case VIEW_NORMALS: {
+        return hit.normal * 0.5 + 0.5; // each axis from -1..1 to 0..1
+      }
+      case VIEW_DISTANCE: {
+        return vec3f(exp(-travelled * 0.1)); // near is bright, far fades to black
+      }
+      case VIEW_SUNLIGHT: {
+        return sunlightView(hit, toSun);
+      }
+      case VIEW_RAYS: {
+        return heat(rays);
+      }
+      default: {
+        return throughput * surface;
+      }
+    }
   }
-  return vec3f(0.0); // ran out of bounces between mirrors
+  // Ran out of bounces between mirrors.
+  if (frame.view == VIEW_RAYS) {
+    return heat(rays);
+  }
+  return vec3f(0.0);
 }
 
 // ---- Output --------------------------------------------------------------
@@ -250,6 +372,18 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
       + frame.cameraRight * (ndc.x * frame.tanHalfFovY * frame.aspect)
       + frame.cameraUp * (ndc.y * frame.tanHalfFovY),
   );
-  let color = trace(Ray(frame.cameraPos, dir));
-  return vec4f(encodeSrgb(toneMap(color)), 1.0);
+  var color = trace(Ray(frame.cameraPos, dir));
+  // Only the final image is light that needs converting for the screen; the
+  // other views are already display colors.
+  if (frame.view == VIEW_FINAL) {
+    if (layerOn(LAYER_TONE_MAP)) {
+      color = toneMap(color);
+    } else {
+      color = min(color, vec3f(1.0)); // the screen can't show more than 1
+    }
+    if (layerOn(LAYER_SRGB)) {
+      color = encodeSrgb(color);
+    }
+  }
+  return vec4f(color, 1.0);
 }

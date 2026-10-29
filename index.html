@@ -12,6 +12,8 @@
     <canvas id="view" aria-label="Real-time ray-traced scene. Drag to orbit, scroll to zoom."></canvas>
     <pre id="hud" hidden></pre>
     <label id="scene-picker">Scene <select id="scene"></select></label>
+    <!-- Filled in by ui/layer-panel.ts. -->
+    <details id="layers" open><summary>Layers</summary></details>
     <div id="message" role="alert" hidden></div>
     <noscript>Hyperion needs JavaScript and WebGPU to run.</noscript>
     <script type="module" src="/src/main.ts"></script>

@@ -6,10 +6,12 @@ import { trackCanvasSize } from './gpu/canvas.ts';
 import { createDevice, describeAdapter, shouldRestart } from './gpu/device.ts';
 import { deviceFailure, lostTooOften, parseSimulation, probe } from './platform/detect.ts';
 import { hideProblem, showProblem } from './platform/unsupported.ts';
+import { VIEWS, defaultSettings, layerBits } from './render/layers.ts';
 import { createWhittedPass } from './render/whitted-pass.ts';
 import { DEFAULT_SCENE, SCENES, findScene } from './scene/registry.ts';
 import type { Scene } from './scene/scene.ts';
 import { createHud } from './ui/hud.ts';
+import { attachLayerPanel } from './ui/layer-panel.ts';
 import { attachScenePicker } from './ui/scene-picker.ts';
 
 const VERTICAL_FOV = (50 * Math.PI) / 180;
@@ -18,10 +20,11 @@ const canvas = requireElement('view', HTMLCanvasElement);
 const hudElement = requireElement('hud', HTMLElement);
 const messageElement = requireElement('message', HTMLElement);
 const sceneSelect = requireElement('scene', HTMLSelectElement);
+const layerPanel = requireElement('layers', HTMLDetailsElement);
 
-// The scene, camera and canvas sizing don't depend on the GPU, so they're set
-// up once and survive device restarts. Input changes them; each frame draws
-// whatever they are at that moment.
+// The scene, camera, render settings and canvas sizing don't depend on the
+// GPU, so they're set up once and survive device restarts. Input changes
+// them; each frame draws whatever they are at that moment.
 let scene = initialScene();
 const orbit: Orbit = { ...scene.camera }; // a copy, so dragging doesn't edit the layout
 attachOrbitControls(canvas, orbit);
@@ -30,7 +33,13 @@ attachScenePicker(sceneSelect, SCENES, scene, (picked) => {
   Object.assign(orbit, picked.camera);
   rememberScene(picked);
 });
+const settings = defaultSettings();
+attachLayerPanel(layerPanel, settings);
 trackCanvasSize(canvas);
+
+// The sun's position comes from this clock, which only runs while "Sun moves"
+// is ticked, so the sun can be stopped to study one shadow.
+let sunSeconds = 0;
 
 const deviceLossTimes: number[] = [];
 
@@ -67,13 +76,15 @@ async function start(): Promise<void> {
   hideProblem(messageElement);
 
   let running = true;
-  const startTime = performance.now();
+  let previousNow: number | null = null;
 
   // requestAnimationFrame calls us once per display refresh, just before the
   // browser paints. `now` is on the same clock as performance.now().
   const frame = (now: number): void => {
     if (!running) return;
     hud.frame(now, canvas.width, canvas.height);
+    if (previousNow !== null && settings.sunMoves) sunSeconds += (now - previousNow) / 1000;
+    previousNow = now;
 
     // Record GPU commands into an encoder, then submit them as one batch.
     const encoder = device.createCommandEncoder({ label: 'frame' });
@@ -82,7 +93,9 @@ async function start(): Promise<void> {
       verticalFovRadians: VERTICAL_FOV,
       width: canvas.width,
       height: canvas.height,
-      timeSeconds: (now - startTime) / 1000,
+      timeSeconds: sunSeconds,
+      layers: layerBits(settings.layers),
+      view: VIEWS[settings.view],
     };
     pass.encode(encoder, context.getCurrentTexture().createView(), params, scene);
     device.queue.submit([encoder.finish()]);
