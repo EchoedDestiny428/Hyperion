@@ -4,7 +4,7 @@
 
 **Goal:** a WebGPU tech demo. First, real-time path tracing in the browser. Then, large scenes that load in seconds.
 
-**Long-term target:** a dreamlike space (empty hallways, pools, soft glowing light) that you can walk through in first person and that looks like a photograph. Each milestone moves toward it: C1 makes it look real while you stand still, denoising keeps it real while you move, and Act 2 brings the detail and textures.
+**Long-term target:** a dreamlike space (empty hallways, pools, soft glowing light) that you can walk through in first person and that looks like a photograph. Each milestone moves toward it: C1 makes it look real while you stand still, C2 keeps it real while you move, and Act 2 brings the detail and textures.
 
 ## How the work is organized
 
@@ -22,6 +22,7 @@
 |---|---|
 | C0: WebGPU skeleton, Whitted ray tracer | done |
 | C1: path tracer | in progress |
+| C2: temporal reprojection and denoising | later |
 | Act 2: large scenes | later |
 
 ## Act 1: real-time ray tracing
@@ -89,7 +90,35 @@
 - materials are set by parameters, and a partly transparent or rough sphere renders correctly;
 - the HUD shows GPU time where it's supported.
 
-### After C1 (candidates, not scheduled)
+### C2: temporal reprojection and denoising (later)
+
+**Goal:** keep the image clean while the camera moves, so you can walk through the dreamspace. C1 makes each sample correct and as low-noise as possible; C2 makes samples last, by reusing them across frames and between neighboring pixels. C1's accumulation is the special case where nothing moved.
+
+**Steps** (first draft):
+1. **A G-buffer:** for each pixel, keep the distance and normal of the surface the camera ray hit, next to the running total. The debug views already compute both.
+2. **Two history buffers,** swapped each frame: read last frame's, write this frame's. Today's single buffer only works because each pixel reads its own slot; after reprojection, pixels read each other's.
+3. **Reprojection:** project each pixel's hit point through last frame's camera to find where it was on screen (its *motion vector*), and read the history there.
+4. **Rejecting wrong history:** if the stored distance or normal doesn't match, the surface has just come into view (a *disocclusion*), and that pixel starts over.
+5. **Fading history:** blend each new sample in with a minimum weight instead of averaging forever, so lighting changes show within a few frames instead of smearing. Each pixel keeps its own sample count in the history's spare 4th value. Standing still, the image still converges fully, as in C1.
+6. **Split the light by what the surface did:** keep matte light (scattered evenly) and mirror-like light (reflections) in separate histories, each with its own rules. Divide out the surface's own color first and multiply it back afterwards ("demodulation"), so filtering smooths only the lighting and never blurs checker edges or textures.
+7. **Reflections that move correctly:** a reflection looks like a copy of the object behind the mirror (its "virtual image"), as far behind as the reflected ray is long. Reproject reflections by that virtual point instead of the mirror's surface. Roughness sets how much history and blur they get: almost none for a sharp mirror, as much as matte light for a frosted one. Glass follows the same idea through refraction.
+8. **Responding to lighting changes:**
+   - direct sunlight is cheap and changes most, so it gets a short history; bounced light is noisy and changes slowly, so it gets a long one;
+   - history far outside the range of the current frame's neighboring pixels, allowing for each pixel's noise, is pulled back into that range ("variance clipping");
+   - *proposed:* a change map as in A-SVGF (Schied et al., 2018). Re-render a few pixels with last frame's random numbers, so any difference is a real change, not noise, and cut history short only there.
+9. **Edge-aware denoising:** blur freshly revealed, noisy pixels with neighbors that show the same surface (similar distance and normal), in a few passes of widening reach, guided by how noisy each pixel is. This is SVGF (Schied et al., 2017), the common baseline for real-time path tracing.
+10. **Debug views:** motion vectors, history length, where history was thrown away, and the matte and mirror-like light on their own.
+11. *Proposed:* ReSTIR, which reuses *which light was worth sampling* across pixels and frames, for scenes with many glowing objects.
+12. The learning note `docs/learn/C2.md`.
+
+**Done when:**
+- walking through the dreamspace in first person stays free of heavy noise, with little smearing behind moving edges;
+- orbiting the mirror ball doesn't smear its reflections;
+- moving the sun or switching a light updates the image within a fraction of a second, without long ghosts;
+- standing still converges to the same clean image as C1;
+- the debug views show where history was kept and where it was thrown away.
+
+### Candidates for later (not scheduled)
 
 - **A shared material library** that all layouts can use.
 - **Per-scene sun and sky.**
@@ -101,7 +130,7 @@
   - depth of field from a thin-lens camera: each ray starts from a random point on the lens, so things away from the focus distance blur;
   - exposure control;
   - bloom, the glow that bleeds around very bright light.
-- **Denoising** while the camera moves: the step that lets you walk through the dreamspace without it dissolving into noise.
+- **Prefiltered patterns:** fade a checker pattern toward its average color as more squares fit in one pixel, the way mipmaps do for textures. It removes moiré even with one sample, which helps while moving.
 
 ## Act 2: large scenes that load in seconds
 
