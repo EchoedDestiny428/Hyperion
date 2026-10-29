@@ -3,8 +3,4 @@ dist/
 assets-src/
 *.log
 
-# Local working agreement for Claude Code. It describes the author, so it stays out of the public repo.
 CLAUDE.md
-
-# The plan mentions the author too. A public write-up goes in the README later.
-docs/PLAN.md
