@@ -54,8 +54,18 @@ body {
   font: inherit;
 }
 
-/* Top-right, out of the HUD's way. Click "Layers" to fold it away. */
-#layers {
+#scene-sliders label {
+  display: block;
+  margin-top: 6px;
+}
+
+#scene-sliders input {
+  display: block;
+  width: 220px;
+}
+
+/* Top-right, out of the HUD's way. Click "Renderer" to fold it away. */
+#settings {
   position: fixed;
   top: 12px;
   right: 12px;
@@ -69,37 +79,28 @@ body {
   font: 12px/1.5 ui-monospace, Consolas, monospace;
 }
 
-#layers summary {
+#settings summary {
   cursor: pointer;
 }
 
-#layers label {
+#settings label {
   display: block;
 }
 
-#layers select,
-#layers button {
+#settings select,
+#settings button {
   font: inherit;
 }
 
-#layers .heading {
-  margin-bottom: 0;
+#settings .heading {
+  margin: 8px 0 0;
   font-weight: bold;
 }
 
-#layers .buttons {
+#settings .buttons {
   display: flex;
   gap: 6px;
   margin-top: 4px;
-}
-
-#layers .legend {
-  margin: 4px 0 8px;
-  color: #b4bdca;
-}
-
-#layers .separated {
-  margin-top: 8px;
 }
 
 #message {

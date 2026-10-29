@@ -3,7 +3,7 @@ import type { Vec3 } from '../math/vec3.ts';
 
 // A scene layout: the materials, the objects, and where the camera starts.
 // Layouts are plain data (see layouts/); packScene() turns one into the bytes
-// whitted.wgsl reads, so the same shader can draw any layout.
+// tracer.wgsl reads, so the same shader can draw any layout.
 
 // What a surface does with light. Each kind has its own fields, and
 // TypeScript checks that a material has exactly the fields of its kind.
@@ -24,10 +24,34 @@ export interface Scene {
   materials: Record<string, Material>;
   ground: string; // material of the ground plane (y = 0)
   spheres: Sphere[];
+  sliders?: HeightSlider[]; // shown under the Scene menu while this scene is picked
+}
+
+// A slider that lifts one sphere off the ground.
+export interface HeightSlider {
+  label: string;
+  sphere: number; // index into spheres
+  max: number; // the most it can be lifted, in meters
+}
+
+// The gap between the ground and the bottom of a sphere.
+export function heightAboveGround(sphere: Sphere): number {
+  return sphere.center[1] - sphere.radius;
+}
+
+// A copy of the scene with one sphere moved to a new height. A new object,
+// so the renderer notices the change, uploads it and restarts accumulation.
+export function withSphereHeight(scene: Scene, index: number, height: number): Scene {
+  return {
+    ...scene,
+    spheres: scene.spheres.map((sphere, i) =>
+      i === index ? { ...sphere, center: [sphere.center[0], height + sphere.radius, sphere.center[2]] } : sphere,
+    ),
+  };
 }
 
 // The number the shader uses for each kind. Must match the KIND_* constants
-// in whitted.wgsl; scene.test.ts checks that.
+// in tracer.wgsl; scene.test.ts checks that.
 export const MATERIAL_KIND: Record<Material['kind'], number> = { diffuse: 0, mirror: 1, checker: 2 };
 
 // Byte sizes of the WGSL structs. A struct containing a vec3f is aligned to

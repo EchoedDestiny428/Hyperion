@@ -11,6 +11,9 @@ export async function createDevice(adapter: GPUAdapter): Promise<GPUDevice> {
   // lets bigger screens refine too. https://www.w3.org/TR/webgpu/#limits
   const device = await adapter.requestDevice({
     label: 'hyperion',
+    // Optional: lets the HUD show real GPU time (gpu/timer.ts). Without it
+    // everything else still works.
+    requiredFeatures: adapter.features.has('timestamp-query') ? ['timestamp-query'] : [],
     requiredLimits: {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
       maxBufferSize: adapter.limits.maxBufferSize,

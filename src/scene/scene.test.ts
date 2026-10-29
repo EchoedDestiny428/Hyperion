@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { MATERIAL_BYTES, MATERIAL_KIND, SCENE_INFO_BYTES, SPHERE_BYTES, type Scene, packScene } from './scene.ts';
+import {
+  MATERIAL_BYTES,
+  MATERIAL_KIND,
+  SCENE_INFO_BYTES,
+  SPHERE_BYTES,
+  type Scene,
+  heightAboveGround,
+  packScene,
+  withSphereHeight,
+} from './scene.ts';
 
 const scene: Scene = {
   name: 'test',
@@ -17,7 +26,7 @@ const scene: Scene = {
   ],
 };
 
-test('fields land at the offsets the structs in whitted.wgsl expect', () => {
+test('fields land at the offsets the structs in tracer.wgsl expect', () => {
   const packed = packScene(scene);
 
   assert.equal(packed.info.byteLength, SCENE_INFO_BYTES);
@@ -52,8 +61,19 @@ test('using a material the scene does not define is an error', () => {
   assert.throws(() => packScene({ ...scene, spheres: [{ center: [0, 0, 0], radius: 1, material: 'lava' }] }), /lava/);
 });
 
-test('material kind numbers match the KIND_* constants in whitted.wgsl', () => {
-  const wgsl = readFileSync(new URL('../render/whitted.wgsl', import.meta.url), 'utf8');
+test('withSphereHeight moves one sphere and leaves the original scene alone', () => {
+  const lifted = withSphereHeight(scene, 0, 2.5);
+  assert.notEqual(lifted, scene);
+  const sphere = lifted.spheres[0];
+  assert.ok(sphere);
+  assert.deepEqual(sphere.center, [1, 6.5, 3]); // gap 2.5 + radius 4
+  assert.equal(heightAboveGround(sphere), 2.5);
+  assert.equal(lifted.spheres[1], scene.spheres[1]);
+  assert.deepEqual(scene.spheres[0]?.center, [1, 2, 3]);
+});
+
+test('material kind numbers match the KIND_* constants in tracer.wgsl', () => {
+  const wgsl = readFileSync(new URL('../render/tracer.wgsl', import.meta.url), 'utf8');
   const inShader = Object.fromEntries(
     [...wgsl.matchAll(/^const KIND_(\w+) = (\d+)u;/gm)].map((m) => [(m[1] ?? '').toLowerCase(), Number(m[2])]),
   );

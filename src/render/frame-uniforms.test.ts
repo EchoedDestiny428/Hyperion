@@ -2,14 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FRAME_UNIFORM_FLOATS, packFrameUniforms } from './frame-uniforms.ts';
 
-test('fields land at the offsets struct Frame in whitted.wgsl expects', () => {
+test('fields land at the offsets struct Frame in tracer.wgsl expects', () => {
   const u = packFrameUniforms({
     camera: { position: [1, 2, 3], right: [4, 5, 6], up: [7, 8, 9], forward: [10, 11, 12] },
     verticalFovRadians: Math.PI / 2, // tan(45°) = 1
     width: 1920,
     height: 1080,
     timeSeconds: 42,
-    layers: 0b101,
+    renderer: 1,
     view: 3,
     sampleIndex: 77,
   });
@@ -26,7 +26,7 @@ test('fields land at the offsets struct Frame in whitted.wgsl expects', () => {
 
   // The integer fields must hold the integers themselves, not float bit patterns.
   const ints = new Uint32Array(u.buffer);
-  assert.equal(ints[15], 0b101);
+  assert.equal(ints[15], 1);
   assert.equal(ints[18], 3);
   assert.equal(ints[19], 77);
 });

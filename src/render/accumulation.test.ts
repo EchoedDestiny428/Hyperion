@@ -9,7 +9,7 @@ const inputs: ImageInputs = {
   width: 800,
   height: 600,
   timeSeconds: 0,
-  layers: 511,
+  renderer: 1,
   view: 0,
 };
 
@@ -28,7 +28,7 @@ test('any change to the inputs or the scene starts the total over', () => {
     { ...inputs, camera: { ...inputs.camera, position: [0, 1, 5.01] } },
     { ...inputs, width: 801 },
     { ...inputs, timeSeconds: 0.016 },
-    { ...inputs, layers: 510 },
+    { ...inputs, renderer: 0 },
     { ...inputs, view: 2 },
   ];
   for (const changed of changes) {

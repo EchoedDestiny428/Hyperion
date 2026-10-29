@@ -25,13 +25,24 @@ npm run dev        # then open the printed http://localhost:5173 URL
 | `npm run build` | Type-check, then produce an optimized build in `dist/` |
 | `npm run preview` | Serve `dist/` locally |
 
+## Controls
+
+| Camera | Controls |
+|---|---|
+| **Orbit** (circles a point) | Drag or arrow keys to circle · scroll to zoom |
+| **Fly** (moves freely) | WASD to move · Q/E down/up · hold Shift for faster · `[` and `]` for slower and faster · drag to look · scroll to zoom |
+
+Pressing W, A, S or D switches to Fly; pressing an arrow key switches back to Orbit. Both cameras turn all the way around, upside down included. Hover the Camera menu for a reminder.
+
 To preview the "can't run here" messages, add `?simulate=no-webgpu`, `?simulate=no-adapter` or `?simulate=insecure` to the URL.
 
 ## Scenes
 
 Pick a scene layout from the menu in the bottom-left corner, or open one directly with `?scene=ball-test-1`. Layouts are plain data in [`src/scene/layouts/`](src/scene/layouts/). To add one, create a file there and list it in `src/scene/registry.ts`.
 
-The **Layers** panel in the top-right corner switches parts of the renderer off one at a time (sunlight, shadows, reflections, tone mapping, …). It also shows debug views such as normals, shadows and rays per pixel. Its anti-aliasing controls set how many samples each pixel averages, and can add them one at a time; the `aliasing-test` scene shows the difference best.
+Some scenes have sliders under the Scene menu; `shadow-heights` lifts a ball to show how shadows soften with height.
+
+The **Renderer** panel in the top-right corner switches between the C0 Whitted ray tracer and the C1 path tracer, picks the camera, and shows debug views such as normals, shadows and rays per pixel. Its anti-aliasing controls set how many samples each pixel averages, and can add them one at a time; the `aliasing-test` scene shows the difference best. The HUD in the top-left shows how long the GPU spends per frame, where the browser can measure it.
 
 ## License
 

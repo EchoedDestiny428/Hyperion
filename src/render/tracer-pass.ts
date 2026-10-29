@@ -1,11 +1,18 @@
-import shaderSource from './whitted.wgsl?raw';
+import shaderSource from './tracer.wgsl?raw';
 import { type Scene, packScene } from '../scene/scene.ts';
 import { FRAME_UNIFORM_FLOATS, type FrameParams, packFrameUniforms } from './frame-uniforms.ts';
 
-export interface WhittedPass {
+export interface TracerPass {
   // Uploads `scene` to the GPU first if it isn't the one drawn last time, and
   // resizes the accumulation buffer if the canvas size changed.
-  encode(encoder: GPUCommandEncoder, target: GPUTextureView, params: FrameParams, scene: Scene): void;
+  // `timestampWrites` (from gpu/timer.ts) measures the pass's GPU time.
+  encode(
+    encoder: GPUCommandEncoder,
+    target: GPUTextureView,
+    params: FrameParams,
+    scene: Scene,
+    timestampWrites?: GPURenderPassTimestampWrites,
+  ): void;
 }
 
 // The GPU copy of one scene.
@@ -26,12 +33,12 @@ const ACCUMULATION_BYTES_PER_PIXEL = 16;
 // Everything here is created once, except the scene's buffers and the
 // accumulation buffer, which are rebuilt when the scene or canvas size
 // changes; encode() runs every frame.
-export function createWhittedPass(device: GPUDevice, format: GPUTextureFormat): WhittedPass {
-  const module = device.createShaderModule({ label: 'whitted', code: shaderSource });
-  void logCompilationMessages(module, 'whitted.wgsl');
+export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): TracerPass {
+  const module = device.createShaderModule({ label: 'tracer', code: shaderSource });
+  void logCompilationMessages(module, 'tracer.wgsl');
 
   const pipeline = device.createRenderPipeline({
-    label: 'whitted',
+    label: 'tracer',
     // 'auto' derives the bind group layout from the shader's @group/@binding
     // declarations. Fine while only this pipeline uses it.
     layout: 'auto',
@@ -55,7 +62,7 @@ export function createWhittedPass(device: GPUDevice, format: GPUTextureFormat): 
   let bindGroup: GPUBindGroup | null = null; // points the shader at all of the above
 
   return {
-    encode(encoder, target, params, scene) {
+    encode(encoder, target, params, scene, timestampWrites) {
       if (sceneBuffers?.scene !== scene) {
         sceneBuffers = uploadScene(device, scene, sceneBuffers);
         bindGroup = null;
@@ -66,7 +73,7 @@ export function createWhittedPass(device: GPUDevice, format: GPUTextureFormat): 
       }
       // Binding 0 is the per-frame values, 1-3 the scene, 4 the running total.
       bindGroup ??= device.createBindGroup({
-        label: `whitted · ${scene.name}`,
+        label: `tracer · ${scene.name}`,
         layout: pipeline.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: uniformBuffer } },
@@ -81,8 +88,9 @@ export function createWhittedPass(device: GPUDevice, format: GPUTextureFormat): 
       device.queue.writeBuffer(uniformBuffer, 0, packFrameUniforms(params, uniforms));
 
       const pass = encoder.beginRenderPass({
-        label: 'whitted',
+        label: 'tracer',
         colorAttachments: [{ view: target, loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store' }],
+        timestampWrites, // undefined counts as not given
       });
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, bindGroup);

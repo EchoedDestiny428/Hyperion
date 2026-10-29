@@ -12,8 +12,7 @@ const beads: Sphere[] = BEAD_DISTANCES.map((distance) => ({
 }));
 
 // A scene full of the things anti-aliasing fixes, for comparing sample counts
-// (Layers panel → Anti-aliasing). Untick "Distance fade" to see the horizon
-// at its worst.
+// (Renderer panel → Anti-aliasing).
 export const aliasingTest: Scene = {
   name: 'aliasing-test',
   // Low and looking along the ground, so the checkerboard stretches to the horizon.

@@ -51,11 +51,13 @@
    - Check: with the camera still, jagged edges smooth out and the far checkerboard stops flickering.
    - Also built: the `aliasing-test` scene, and panel controls for the sample count (1 to 1,024) and the pace, down to one sample at a time.
 
-*Chunk 2: real light*
+*Chunk 2: real light (done)*
 
-4. **Diffuse bounces** in random directions (cosine-weighted), with the sky as a light source. Keep the sun's shadow ray at each bounce ("next-event estimation") so noise stays low. This replaces `ambient`.
+4. **Diffuse bounces** in random directions (cosine-weighted), with the sky as a light source. Keep the sun's shadow ray at each bounce ("next-event estimation") so noise stays low. This replaces `ambient`. Paths end by Russian roulette after a few bounces.
 5. **Soft sun shadows:** aim each shadow ray at a random point on the sun's disk (about 0.5° wide) instead of its center.
    - Check: color bleeds between nearby surfaces, objects darken where they touch the ground, and shadow edges blur more the farther they fall from the object.
+   - Also in chunk 2: the **Renderer menu** keeps the Whitted tracer selectable (decided; it was step 13), replacing the layer switches, and **GPU timing** moved here from chunk 5 (step 12).
+   - Known gaps: no caustics, and the painted sky is brighter than a real one next to the sun, so shadows look a little washed out.
 
 *Chunk 3: boxes, glowing objects and the Cornell box*
 
@@ -73,15 +75,15 @@
    - Parameters: `baseColor`, `roughness`, `metallic`, `transmission`, `ior` and `emission` (from step 7), with defaults so scene files stay short.
    - The path tracer samples each one: matte, rough or smooth metal (GGX microfacet), and glass (refraction with Fresnel).
    - "Checker" stops being a material kind and becomes a pattern on `baseColor`.
-10. **A first-person camera:** WASD to walk, the mouse to look (with pointer lock), next to the existing orbit camera. Each scene says which camera it starts with.
+10. **A first-person camera:** done early, as a floating "Fly" camera (WASD, Q/E, drag to look, all the way around) next to the orbit camera. Still open: pointer lock for mouse look, walking with gravity and collisions for the dreamspace, and letting each scene choose its starting camera.
 11. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled room or hallway with a pool, lit by glowing ceiling panels and daylight through an opening. It uses every material: glass or water, rough and smooth metal, matte, and glowing surfaces. Tiles are checker patterns until image textures arrive.
     - Check: standing still inside it, the room refines into an image that could pass for a photo.
 
 *Chunk 5: measuring and explaining*
 
-12. **GPU timing** with the `timestamp-query` feature where the browser offers it, clearly labelled when it doesn't. The HUD shows p50/p95/p99 frame times.
-13. *Proposed:* keep the Whitted tracer selectable, to compare the two side by side.
-14. The learning note `docs/learn/C1.md`.
+12. ~~GPU timing~~: done early, in chunk 2. The HUD shows p50/p95/p99 GPU time where the browser offers `timestamp-query`.
+13. ~~Keep the Whitted tracer selectable~~: done in chunk 2, as the Renderer menu.
+14. Finish the learning note `docs/learn/C1.md`.
 
 **Done when:**
 - a still camera converges to a clean image with soft shadows and color bleeding;

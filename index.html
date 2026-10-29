@@ -9,11 +9,15 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <canvas id="view" aria-label="Real-time ray-traced scene. Drag to orbit, scroll to zoom."></canvas>
+    <canvas id="view" aria-label="Real-time ray-traced scene. Drag or use the arrow keys to orbit, scroll to zoom, WASD to fly."></canvas>
     <pre id="hud" hidden></pre>
-    <label id="scene-picker">Scene <select id="scene"></select></label>
-    <!-- Filled in by ui/layer-panel.ts. -->
-    <details id="layers" open><summary>Layers</summary></details>
+    <div id="scene-picker">
+      <label>Scene <select id="scene"></select></label>
+      <!-- Filled in by ui/scene-sliders.ts for scenes that have sliders. -->
+      <div id="scene-sliders" hidden></div>
+    </div>
+    <!-- Filled in by ui/settings-panel.ts. -->
+    <details id="settings" open><summary>Renderer</summary></details>
     <div id="message" role="alert" hidden></div>
     <noscript>Hyperion needs JavaScript and WebGPU to run.</noscript>
     <script type="module" src="/src/main.ts"></script>

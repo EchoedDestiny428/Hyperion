@@ -4,7 +4,7 @@ import type { FrameParams } from './frame-uniforms.ts';
 // Progressive accumulation. While nothing changes, frames add samples to a
 // running total per pixel on the GPU, and the screen shows the average, so
 // the image keeps getting smoother. Anything that changes what the image
-// shows (camera, canvas size, sun, layers, view, scene) starts the total over.
+// shows (camera, canvas size, sun, renderer, view, scene) starts the total over.
 
 // The sample-count choices in the Anti-aliasing menu, like games' "4x" or
 // "16x" supersampling. The image stops refining at the chosen count, and
