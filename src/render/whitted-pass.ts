@@ -3,19 +3,29 @@ import { type Scene, packScene } from '../scene/scene.ts';
 import { FRAME_UNIFORM_FLOATS, type FrameParams, packFrameUniforms } from './frame-uniforms.ts';
 
 export interface WhittedPass {
-  // Uploads `scene` to the GPU first if it isn't the one drawn last time.
+  // Uploads `scene` to the GPU first if it isn't the one drawn last time, and
+  // resizes the accumulation buffer if the canvas size changed.
   encode(encoder: GPUCommandEncoder, target: GPUTextureView, params: FrameParams, scene: Scene): void;
 }
 
-// The GPU copy of one scene, and the bind group that points the shader at it.
-interface SceneResources {
+// The GPU copy of one scene.
+interface SceneBuffers {
   scene: Scene;
-  buffers: GPUBuffer[];
-  bindGroup: GPUBindGroup;
+  buffers: GPUBuffer[]; // info, spheres, materials
 }
 
-// Everything here is created once, except the scene's buffers, which are
-// rebuilt when the scene changes; encode() runs every frame.
+// The running total of samples, one vec4f (16 bytes) per pixel.
+interface Accumulation {
+  width: number;
+  height: number;
+  buffer: GPUBuffer;
+}
+
+const ACCUMULATION_BYTES_PER_PIXEL = 16;
+
+// Everything here is created once, except the scene's buffers and the
+// accumulation buffer, which are rebuilt when the scene or canvas size
+// changes; encode() runs every frame.
 export function createWhittedPass(device: GPUDevice, format: GPUTextureFormat): WhittedPass {
   const module = device.createShaderModule({ label: 'whitted', code: shaderSource });
   void logCompilationMessages(module, 'whitted.wgsl');
@@ -40,34 +50,30 @@ export function createWhittedPass(device: GPUDevice, format: GPUTextureFormat): 
 
   const uniforms = new Float32Array(FRAME_UNIFORM_FLOATS); // reused every frame
 
-  // Binding 0 is the per-frame values; bindings 1-3 are the scene.
-  const uploadScene = (scene: Scene, previous: SceneResources | null): SceneResources => {
-    const packed = packScene(scene);
-    const info = createBufferWithData(device, `${scene.name} info`, packed.info, GPUBufferUsage.UNIFORM);
-    const spheres = createBufferWithData(device, `${scene.name} spheres`, packed.spheres, GPUBufferUsage.STORAGE);
-    const materials = createBufferWithData(device, `${scene.name} materials`, packed.materials, GPUBufferUsage.STORAGE);
-    const bindGroup = device.createBindGroup({
-      label: `whitted · ${scene.name}`,
-      layout: pipeline.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: info } },
-        { binding: 2, resource: { buffer: spheres } },
-        { binding: 3, resource: { buffer: materials } },
-      ],
-    });
-    // Frames already submitted still finish with the old buffers: destroy()
-    // only frees their memory once the GPU is done with them.
-    // https://www.w3.org/TR/webgpu/#dom-gpubuffer-destroy
-    for (const buffer of previous?.buffers ?? []) buffer.destroy();
-    return { scene, buffers: [info, spheres, materials], bindGroup };
-  };
-
-  let current: SceneResources | null = null;
+  let sceneBuffers: SceneBuffers | null = null;
+  let accumulation: Accumulation | null = null;
+  let bindGroup: GPUBindGroup | null = null; // points the shader at all of the above
 
   return {
     encode(encoder, target, params, scene) {
-      if (current?.scene !== scene) current = uploadScene(scene, current);
+      if (sceneBuffers?.scene !== scene) {
+        sceneBuffers = uploadScene(device, scene, sceneBuffers);
+        bindGroup = null;
+      }
+      if (accumulation?.width !== params.width || accumulation.height !== params.height) {
+        accumulation = createAccumulation(device, params.width, params.height, accumulation);
+        bindGroup = null;
+      }
+      // Binding 0 is the per-frame values, 1-3 the scene, 4 the running total.
+      bindGroup ??= device.createBindGroup({
+        label: `whitted · ${scene.name}`,
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: uniformBuffer } },
+          ...sceneBuffers.buffers.map((buffer, i) => ({ binding: i + 1, resource: { buffer } })),
+          { binding: 4, resource: { buffer: accumulation.buffer } },
+        ],
+      });
 
       // writeBuffer is scheduled on the queue and completes before any
       // command buffer submitted after it, so this frame's draw sees these values.
@@ -79,11 +85,48 @@ export function createWhittedPass(device: GPUDevice, format: GPUTextureFormat): 
         colorAttachments: [{ view: target, loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store' }],
       });
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, current.bindGroup);
+      pass.setBindGroup(0, bindGroup);
       pass.draw(3); // the full-screen triangle; the shader computes its corners
       pass.end();
     },
   };
+}
+
+function uploadScene(device: GPUDevice, scene: Scene, previous: SceneBuffers | null): SceneBuffers {
+  const packed = packScene(scene);
+  const buffers = [
+    createBufferWithData(device, `${scene.name} info`, packed.info, GPUBufferUsage.UNIFORM),
+    createBufferWithData(device, `${scene.name} spheres`, packed.spheres, GPUBufferUsage.STORAGE),
+    createBufferWithData(device, `${scene.name} materials`, packed.materials, GPUBufferUsage.STORAGE),
+  ];
+  // Frames already submitted still finish with the old buffers: destroy()
+  // only frees their memory once the GPU is done with them.
+  // https://www.w3.org/TR/webgpu/#dom-gpubuffer-destroy
+  for (const buffer of previous?.buffers ?? []) buffer.destroy();
+  return { scene, buffers };
+}
+
+// The running total needs no initial contents: the first sample after any
+// change overwrites it rather than adding to it.
+function createAccumulation(
+  device: GPUDevice,
+  width: number,
+  height: number,
+  previous: Accumulation | null,
+): Accumulation {
+  previous?.buffer.destroy();
+  let size = width * height * ACCUMULATION_BYTES_PER_PIXEL;
+  const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
+  if (size > limit) {
+    const mb = (bytes: number): string => `${Math.round(bytes / 2 ** 20)} MB`;
+    console.warn(
+      `[accumulation] A ${width}×${height} canvas needs ${mb(size)} for its running total, but this GPU allows ` +
+        `${mb(limit)} in one buffer, so the image won't refine. Make the window smaller to fix it.`,
+    );
+    size = ACCUMULATION_BYTES_PER_PIXEL; // a single element; the shader then skips accumulating
+  }
+  const buffer = device.createBuffer({ label: `accumulation ${width}×${height}`, size, usage: GPUBufferUsage.STORAGE });
+  return { width, height, buffer };
 }
 
 // A buffer holding `data`, which shaders read as `usage` (UNIFORM or STORAGE).

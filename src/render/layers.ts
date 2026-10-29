@@ -3,6 +3,8 @@
 // from struct Frame: the layers as bit flags, the view as a number.
 // Must match the LAYER_* and VIEW_* constants in whitted.wgsl; layers.test.ts checks.
 
+import { MAX_SAMPLES, type Pace } from './accumulation.ts';
+
 // One bit per layer, so all of them fit in a single u32: bit set = layer on.
 export const LAYER_BITS = {
   sun: 1 << 0, // direct sunlight
@@ -37,12 +39,16 @@ export const VIEW_NAMES = Object.keys(VIEWS) as View[];
 export interface RenderSettings {
   layers: Record<Layer, boolean>;
   view: View;
-  sunMoves: boolean; // off = the sun stands still, to study one shadow
+  sunMoves: boolean; // on = the sun circles, so the image can't refine
+  sampleLimit: number; // anti-aliasing: one of SAMPLE_LIMITS
+  pace: Pace;
 }
 
 export function defaultSettings(): RenderSettings {
   const layers = Object.fromEntries(LAYER_NAMES.map((name) => [name, true])) as Record<Layer, boolean>;
-  return { layers, view: 'final', sunMoves: true };
+  // The sun starts still: a moving sun changes the image every frame, which
+  // restarts accumulation every frame.
+  return { layers, view: 'final', sunMoves: false, sampleLimit: MAX_SAMPLES, pace: 'full' };
 }
 
 // The bit flags for the layers that are on, as struct Frame's `layers`.

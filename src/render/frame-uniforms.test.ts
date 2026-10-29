@@ -11,6 +11,7 @@ test('fields land at the offsets struct Frame in whitted.wgsl expects', () => {
     timeSeconds: 42,
     layers: 0b101,
     view: 3,
+    sampleIndex: 77,
   });
   assert.equal(u.length, FRAME_UNIFORM_FLOATS);
   assert.equal(u.byteLength % 16, 0); // uniform structs are sized in 16-byte steps
@@ -27,4 +28,5 @@ test('fields land at the offsets struct Frame in whitted.wgsl expects', () => {
   const ints = new Uint32Array(u.buffer);
   assert.equal(ints[15], 0b101);
   assert.equal(ints[18], 3);
+  assert.equal(ints[19], 77);
 });

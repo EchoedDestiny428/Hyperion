@@ -5,9 +5,17 @@
 // app's own connection to it. Every buffer, texture and pipeline we create
 // belongs to the device.
 export async function createDevice(adapter: GPUAdapter): Promise<GPUDevice> {
-  // Default features and limits for now: everything C0 needs is guaranteed
-  // on every WebGPU implementation.
-  const device = await adapter.requestDevice({ label: 'hyperion' });
+  // Default limits, except buffer sizes. The accumulation buffer holds 16
+  // bytes per pixel, and the default 128 MB limit only covers about 8 million
+  // pixels, a 4K canvas. Asking for whatever this GPU allows (often gigabytes)
+  // lets bigger screens refine too. https://www.w3.org/TR/webgpu/#limits
+  const device = await adapter.requestDevice({
+    label: 'hyperion',
+    requiredLimits: {
+      maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+      maxBufferSize: adapter.limits.maxBufferSize,
+    },
+  });
 
   // WebGPU calls don't throw when you misuse them. Errors are reported
   // asynchronously, and any not caught by an error scope arrive here.

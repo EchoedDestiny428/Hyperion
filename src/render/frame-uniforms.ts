@@ -9,7 +9,7 @@ import type { CameraBasis } from '../camera/orbit.ts';
 //                         4..6 cameraRight    7 aspect
 //                         8..10 cameraUp     11 time
 //                        12..14 cameraForward 15 layers (u32)
-//                        16..17 resolution   18 view (u32)   19 (padding: struct size rounds up to 16 bytes)
+//                        16..17 resolution   18 view (u32)   19 sampleIndex (u32)
 export const FRAME_UNIFORM_FLOATS = 20; // = 80 bytes
 
 export interface FrameParams {
@@ -20,15 +20,16 @@ export interface FrameParams {
   timeSeconds: number; // drives the sun's movement
   layers: number; // bit flags, from layerBits() in layers.ts
   view: number; // a value of VIEWS in layers.ts
+  sampleIndex: number; // samples already in the running total; 0 = start over (accumulation.ts)
 }
 
 export function packFrameUniforms(
   p: FrameParams,
   out: Float32Array = new Float32Array(FRAME_UNIFORM_FLOATS),
 ): Float32Array {
-  // `layers` and `view` are u32 in the shader. Written through the float view
-  // they'd become float bit patterns, so they go through an integer view of
-  // the same bytes.
+  // `layers`, `view` and `sampleIndex` are u32 in the shader. Written through
+  // the float view they'd become float bit patterns, so they go through an
+  // integer view of the same bytes.
   const ints = new Uint32Array(out.buffer, out.byteOffset, FRAME_UNIFORM_FLOATS);
   out.set(p.camera.position, 0);
   out[3] = Math.tan(p.verticalFovRadians / 2);
@@ -41,6 +42,6 @@ export function packFrameUniforms(
   out[16] = p.width;
   out[17] = p.height;
   ints[18] = p.view;
-  out[19] = 0;
+  ints[19] = p.sampleIndex;
   return out;
 }

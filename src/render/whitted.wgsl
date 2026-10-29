@@ -17,7 +17,7 @@ struct Frame {
   layers: u32, // bit flags: which LAYER_* are on
   resolution: vec2f,
   view: u32, // one of VIEW_*
-  _pad: f32,
+  sampleIndex: u32, // samples already in the running total; 0 = start over
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -338,6 +338,39 @@ fn trace(primary: Ray) -> vec3f {
   return vec3f(0.0);
 }
 
+// ---- Random numbers ------------------------------------------------------
+// GPUs have no built-in random(), and every pixel needs its own unrelated
+// numbers. A hash function scrambles an input into a number that looks
+// random; seeding it with the pixel and the sample number gives each pixel a
+// different sequence, and each sample a different one again.
+// PCG hash from Jarzynski & Olano, "Hash Functions for GPU Rendering" (2020):
+// https://jcgt.org/published/0009/03/02/
+fn pcgHash(input: u32) -> u32 {
+  let state = input * 747796405u + 2891336453u; // u32 math wraps around on overflow
+  let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+  return (word >> 22u) ^ word;
+}
+
+// Each pixel's invocation of the shader has its own copy of a `private` variable.
+var<private> rngState: u32;
+
+fn seedRandom(pixel: vec2u, sampleNumber: u32) {
+  rngState = pcgHash(pixel.x + pcgHash(pixel.y + pcgHash(sampleNumber)));
+}
+
+// A random number in [0, 1). Uses the top 24 bits, because an f32 holds 24
+// bits exactly; converting all 32 could round up to 1.0.
+fn random() -> f32 {
+  rngState = pcgHash(rngState);
+  return f32(rngState >> 8u) / 16777216.0;
+}
+
+// ---- Accumulation --------------------------------------------------------
+// The running total of samples for each pixel, one vec4f per pixel, row by
+// row. Its size follows the canvas (whitted-pass.ts). If the canvas is too
+// big for one buffer, it holds a single element and the image doesn't refine.
+@group(0) @binding(4) var<storage, read_write> accumulation: array<vec4f>;
+
 // ---- Output --------------------------------------------------------------
 // Squeezes unbounded brightness into 0..1 with a gentle film-like curve,
 // instead of clipping everything above 1 to white. ACES curve fit by
@@ -360,10 +393,24 @@ fn encodeSrgb(linear: vec3f) -> vec3f {
 @fragment
 fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   // pixel.xy is this pixel's center in canvas pixels: origin top-left, y
-  // down. Map it to -1..1 on both axes with +y up.
+  // down. Its integer part says which pixel this is.
+  let pixelIndex = vec2u(pixel.xy);
+  seedRandom(pixelIndex, frame.sampleIndex);
+
+  // Anti-aliasing. A pixel covers a small square of the scene, not a point.
+  // The first sample goes through its center, as in C0, so a moving camera
+  // looks steady. Later samples go through random points in the square, and
+  // averaging them gives the pixel the average color of everything in it:
+  // smooth edges, and no flicker on the far checkerboard.
+  var position = pixel.xy;
+  if (frame.sampleIndex > 0u) {
+    position = vec2f(pixelIndex) + vec2f(random(), random());
+  }
+
+  // Map the position to -1..1 on both axes with +y up.
   let ndc = vec2f(
-    pixel.x / frame.resolution.x * 2.0 - 1.0,
-    1.0 - pixel.y / frame.resolution.y * 2.0,
+    position.x / frame.resolution.x * 2.0 - 1.0,
+    1.0 - position.y / frame.resolution.y * 2.0,
   );
   // Aim through that point on an imaginary screen one unit in front of the
   // camera. Its half-height is tan(fov/2); half-width is that × aspect.
@@ -372,7 +419,23 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
       + frame.cameraRight * (ndc.x * frame.tanHalfFovY * frame.aspect)
       + frame.cameraUp * (ndc.y * frame.tanHalfFovY),
   );
-  var color = trace(Ray(frame.cameraPos, dir));
+  let light = trace(Ray(frame.cameraPos, dir));
+
+  // Add this sample to the pixel's running total and show the average. The
+  // average is taken before tone mapping: averaging light, not finished
+  // screen colors, is what makes a half-covered edge pixel look right.
+  var total = light;
+  var count = 1.0;
+  let slot = pixelIndex.y * u32(frame.resolution.x) + pixelIndex.x;
+  if (slot < arrayLength(&accumulation)) {
+    if (frame.sampleIndex > 0u) {
+      total += accumulation[slot].rgb;
+      count = f32(frame.sampleIndex + 1u);
+    }
+    accumulation[slot] = vec4f(total, 0.0);
+  }
+  var color = total / count;
+
   // Only the final image is light that needs converting for the screen; the
   // other views are already display colors.
   if (frame.view == VIEW_FINAL) {

@@ -31,7 +31,7 @@ To preview the "can't run here" messages, add `?simulate=no-webgpu`, `?simulate=
 
 Pick a scene layout from the menu in the bottom-left corner, or open one directly with `?scene=ball-test-1`. Layouts are plain data in [`src/scene/layouts/`](src/scene/layouts/). To add one, create a file there and list it in `src/scene/registry.ts`.
 
-The **Layers** panel in the top-right corner switches parts of the renderer off one at a time (sunlight, shadows, reflections, tone mapping, …). It also shows debug views such as normals, shadows and rays per pixel.
+The **Layers** panel in the top-right corner switches parts of the renderer off one at a time (sunlight, shadows, reflections, tone mapping, …). It also shows debug views such as normals, shadows and rays per pixel. Its anti-aliasing controls set how many samples each pixel averages, and can add them one at a time; the `aliasing-test` scene shows the difference best.
 
 ## License
 

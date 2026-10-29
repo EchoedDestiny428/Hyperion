@@ -6,6 +6,7 @@ import { trackCanvasSize } from './gpu/canvas.ts';
 import { createDevice, describeAdapter, shouldRestart } from './gpu/device.ts';
 import { deviceFailure, lostTooOften, parseSimulation, probe } from './platform/detect.ts';
 import { hideProblem, showProblem } from './platform/unsupported.ts';
+import { createSampleCounter, targetSamples } from './render/accumulation.ts';
 import { VIEWS, defaultSettings, layerBits } from './render/layers.ts';
 import { createWhittedPass } from './render/whitted-pass.ts';
 import { DEFAULT_SCENE, SCENES, findScene } from './scene/registry.ts';
@@ -34,11 +35,22 @@ attachScenePicker(sceneSelect, SCENES, scene, (picked) => {
   rememberScene(picked);
 });
 const settings = defaultSettings();
-attachLayerPanel(layerPanel, settings);
+// The panel's buttons raise these flags, and the next frame acts on them.
+let stepRequested = false;
+let restartRequested = false;
+attachLayerPanel(layerPanel, settings, {
+  nextSample: () => {
+    stepRequested = true;
+  },
+  restartSamples: () => {
+    restartRequested = true;
+  },
+});
 trackCanvasSize(canvas);
 
 // The sun's position comes from this clock, which only runs while "Sun moves"
-// is ticked, so the sun can be stopped to study one shadow.
+// is ticked. A moving sun changes the image every frame, so the image can
+// only refine (accumulation.ts) while it stands still.
 let sunSeconds = 0;
 
 const deviceLossTimes: number[] = [];
@@ -73,22 +85,22 @@ async function start(): Promise<void> {
 
   const pass = createWhittedPass(device, format);
   const hud = createHud(hudElement, describeAdapter(adapter));
+  // Per device: a new device has a new, empty accumulation buffer.
+  const samples = createSampleCounter();
   hideProblem(messageElement);
 
   let running = true;
   let previousNow: number | null = null;
+  let lastSampleTime = -Infinity;
 
   // requestAnimationFrame calls us once per display refresh, just before the
   // browser paints. `now` is on the same clock as performance.now().
   const frame = (now: number): void => {
     if (!running) return;
-    hud.frame(now, canvas.width, canvas.height);
     if (previousNow !== null && settings.sunMoves) sunSeconds += (now - previousNow) / 1000;
     previousNow = now;
 
-    // Record GPU commands into an encoder, then submit them as one batch.
-    const encoder = device.createCommandEncoder({ label: 'frame' });
-    const params = {
+    const inputs = {
       camera: orbitBasis(orbit),
       verticalFovRadians: VERTICAL_FOV,
       width: canvas.width,
@@ -97,8 +109,37 @@ async function start(): Promise<void> {
       layers: layerBits(settings.layers),
       view: VIEWS[settings.view],
     };
-    pass.encode(encoder, context.getCurrentTexture().createView(), params, scene);
-    device.queue.submit([encoder.finish()]);
+    samples.check(inputs, scene);
+    // Restart, or lower the limit below what the image already holds: start over.
+    if (restartRequested || samples.held > settings.sampleLimit) samples.restart();
+    restartRequested = false;
+    const target = targetSamples({
+      held: samples.held,
+      limit: settings.sampleLimit,
+      pace: settings.pace,
+      msSinceLastSample: now - lastSampleTime,
+      stepRequested,
+    });
+    stepRequested = false;
+
+    // Draw only when the image needs another sample. Otherwise skip the GPU
+    // work: without a new texture from getCurrentTexture(), the canvas keeps
+    // showing the last image.
+    if (samples.held < target) {
+      const sampleIndex = samples.take();
+      lastSampleTime = now;
+      // Record GPU commands into an encoder, then submit them as one batch.
+      const encoder = device.createCommandEncoder({ label: 'frame' });
+      pass.encode(encoder, context.getCurrentTexture().createView(), { ...inputs, sampleIndex }, scene);
+      device.queue.submit([encoder.finish()]);
+    }
+    hud.frame(now, {
+      width: canvas.width,
+      height: canvas.height,
+      samples: samples.held,
+      sampleLimit: settings.sampleLimit,
+      pace: settings.pace,
+    });
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);

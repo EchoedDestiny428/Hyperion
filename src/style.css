@@ -77,8 +77,20 @@ body {
   display: block;
 }
 
-#layers select {
+#layers select,
+#layers button {
   font: inherit;
+}
+
+#layers .heading {
+  margin-bottom: 0;
+  font-weight: bold;
+}
+
+#layers .buttons {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
 }
 
 #layers .legend {
