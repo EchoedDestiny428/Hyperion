@@ -4,6 +4,8 @@
 
 **Goal:** a WebGPU tech demo. First, real-time path tracing in the browser. Then, large scenes that load in seconds.
 
+**Long-term target:** a dreamlike space (empty hallways, pools, soft glowing light) that you can walk through in first person and that looks like a photograph. Each milestone moves toward it: C1 makes it look real while you stand still, denoising keeps it real while you move, and Act 2 brings the detail and textures.
+
 ## How the work is organized
 
 - **Acts** are the big goals. **Milestones** (C0, C1, …) are the steps inside them.
@@ -19,7 +21,7 @@
 | Milestone | Status |
 |---|---|
 | C0: WebGPU skeleton, Whitted ray tracer | done |
-| C1: path tracer | next |
+| C1: path tracer | in progress |
 | Act 2: large scenes | later |
 
 ## Act 1: real-time ray tracing
@@ -30,7 +32,7 @@
 - A full-screen fragment-shader ray tracer: spheres, a ground plane, hard shadows, mirror reflections, ACES tone mapping.
 - Scene layouts as data (`src/scene/layouts/`), chosen from a menu or with `?scene=`. Material kinds: diffuse, mirror, checker.
 
-### C1: path tracer (next)
+### C1: path tracer (in progress)
 
 **From the code comments:**
 - real bounce light, replacing the fake `ambient` term;
@@ -40,12 +42,13 @@
 
 **Steps,** in five chunks. Each chunk ends with something you can check by eye.
 
-*Chunk 1: an image that refines itself*
+*Chunk 1: an image that refines itself (done)*
 
 1. **Random numbers on the GPU:** a per-pixel hash seeded by pixel position and frame number.
 2. **Progressive accumulation:** add each frame's sample to a running total per pixel, and show the average. Reset when the camera moves, the canvas resizes, or the scene or layers change.
 3. **Anti-aliasing** by shifting each frame's ray slightly within its pixel. Accumulation turns this into smooth edges for free.
    - Check: with the camera still, jagged edges smooth out and the far checkerboard stops flickering.
+   - Also built: the `aliasing-test` scene, and panel controls for the sample count (1 to 1,024) and the pace, down to one sample at a time.
 
 *Chunk 2: real light*
 
@@ -69,13 +72,15 @@
    - Parameters: `baseColor`, `roughness`, `metallic`, `transmission`, `ior` and `emission` (from step 7), with defaults so scene files stay short.
    - The path tracer samples each one: matte, rough or smooth metal (GGX microfacet), and glass (refraction with Fresnel).
    - "Checker" stops being a material kind and becomes a pattern on `baseColor`.
-10. **A showcase scene** that uses every material: glass, rough and smooth metal, matte, and glowing objects. It shows off lighting and materials; detailed objects come with Act 2's meshes.
+10. **A first-person camera:** WASD to walk, the mouse to look (with pointer lock), next to the existing orbit camera. Each scene says which camera it starts with.
+11. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled room or hallway with a pool, lit by glowing ceiling panels and daylight through an opening. It uses every material: glass or water, rough and smooth metal, matte, and glowing surfaces. Tiles are checker patterns until image textures arrive.
+    - Check: standing still inside it, the room refines into an image that could pass for a photo.
 
 *Chunk 5: measuring and explaining*
 
-11. **GPU timing** with the `timestamp-query` feature where the browser offers it, clearly labelled when it doesn't. The HUD shows p50/p95/p99 frame times.
-12. *Proposed:* keep the Whitted tracer selectable, to compare the two side by side.
-13. The learning note `docs/learn/C1.md`.
+12. **GPU timing** with the `timestamp-query` feature where the browser offers it, clearly labelled when it doesn't. The HUD shows p50/p95/p99 frame times.
+13. *Proposed:* keep the Whitted tracer selectable, to compare the two side by side.
+14. The learning note `docs/learn/C1.md`.
 
 **Done when:**
 - a still camera converges to a clean image with soft shadows and color bleeding;
@@ -96,7 +101,7 @@
   - depth of field from a thin-lens camera: each ray starts from a random point on the lens, so things away from the focus distance blur;
   - exposure control;
   - bloom, the glow that bleeds around very bright light.
-- **Denoising** while the camera moves.
+- **Denoising** while the camera moves: the step that lets you walk through the dreamspace without it dissolving into noise.
 
 ## Act 2: large scenes that load in seconds
 
@@ -107,11 +112,12 @@
    - traverse it in WGSL with a small stack;
    - measure rays per second before and after.
 3. **An asset pipeline:** source models live in `assets-src/` (gitignored) and are converted offline into a compact binary format the browser can upload with little parsing. Third-party assets are credited, with their licenses, in the README.
-4. **Fast loading:**
+4. **Image textures** for color, roughness and surface bumps (normal maps), so the dreamspace gets real tile, carpet and concrete.
+5. **Fast loading:**
    - stream data in chunks and show something early;
    - parse in Web Workers;
    - use compressed textures.
-5. *Proposed:* build the BVH on the GPU with compute shaders, once the CPU version is correct and measured.
+6. *Proposed:* build the BVH on the GPU with compute shaders, once the CPU version is correct and measured.
 
 ## Open questions
 
