@@ -1,9 +1,10 @@
 // Two renderers in one shader, picked from the Renderer menu:
-// - Whitted (C0): one ray per pixel; at a matte surface, a shadow ray toward
-//   the sun and a fake "ambient" term; mirrors bounce the ray onward.
-// - Path tracer (C1): light really bounces, the sky lights the scene, and
-//   each sample follows one random path. Many samples averaged (accumulation)
-//   give the clean image.
+// - Whitted (C0): one ray per pixel; at a matte surface, shadow rays toward
+//   the sun and each light and a fake "ambient" term; mirrors bounce the ray
+//   onward.
+// - Path tracer (C1): light really bounces, the sky and glowing objects light
+//   the scene, and each sample follows one random path. Many samples averaged
+//   (accumulation) give the clean image.
 // WGSL spec: https://www.w3.org/TR/WGSL/
 
 // Must match packFrameUniforms() in frame-uniforms.ts. A vec3f is aligned to
@@ -58,9 +59,14 @@ fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
 
 struct SceneInfo {
   sphereCount: u32,
-  groundMaterial: u32, // index into materials
-  _pad: vec2u,
+  boxCount: u32,
+  lightCount: u32,
+  groundMaterial: u32, // index into materials, or NO_GROUND
+  sunColor: vec3f, // the sun's color times its brightness
+  skyStrength: f32, // multiplies the sky: 1 is daytime
 }
+
+const NO_GROUND = 4294967295u; // 0xffffffff: this scene has no ground plane
 
 struct Sphere {
   center: vec3f,
@@ -68,6 +74,13 @@ struct Sphere {
   material: u32, // index into materials
   // WGSL pads this struct from 20 to 32 bytes: a struct holding a vec3f is
   // aligned to 16 bytes, and its size rounds up to match.
+}
+
+struct Box {
+  center: vec3f,
+  material: u32,
+  halfSize: vec3f, // half the width, height and depth, before rotating
+  rotation: mat3x3f, // columns: where the box's own x, y and z axes point
 }
 
 // Material kinds. Must match MATERIAL_KIND in scene/scene.ts (scene.test.ts checks).
@@ -80,6 +93,20 @@ struct Material {
   kind: u32,
   colorB: vec3f,
   cellSize: f32,
+  emission: vec3f, // light it gives off by itself; black for most materials
+  reflectivity: f32, // matte kinds: the share reflected like a mirror coat
+}
+
+// The glowing objects, for aiming shadow rays at them. Must match LIGHT_KIND
+// in scene/scene.ts.
+const LIGHT_SPHERE = 0u;
+const LIGHT_BOX = 1u;
+
+struct Light {
+  kind: u32, // LIGHT_SPHERE or LIGHT_BOX
+  index: u32, // into spheres or boxes
+  cdf: f32, // running total of the pick probabilities, ending at 1
+  probability: f32, // of this light being picked
 }
 
 // A uniform buffer is small and fixed-size. Storage buffers can be large, and
@@ -88,6 +115,8 @@ struct Material {
 @group(0) @binding(1) var<uniform> scene: SceneInfo;
 @group(0) @binding(2) var<storage, read> spheres: array<Sphere>;
 @group(0) @binding(3) var<storage, read> materials: array<Material>;
+@group(0) @binding(5) var<storage, read> boxes: array<Box>;
+@group(0) @binding(6) var<storage, read> lights: array<Light>;
 
 struct Ray {
   origin: vec3f,
@@ -129,9 +158,57 @@ fn intersectSphere(ray: Ray, sphere: Sphere) -> f32 {
   return t;
 }
 
+struct BoxHit {
+  t: f32,
+  normal: vec3f,
+}
+
+fn intersectBox(ray: Ray, box: Box) -> BoxHit {
+  // Move the ray into the box's own coordinates, where the box is centered
+  // at the origin and lined up with the axes: undo the move, then the
+  // rotation. A rotation matrix's inverse is its transpose, and `v * m`
+  // multiplies by the transpose.
+  let origin = (ray.origin - box.center) * box.rotation;
+  var dir = ray.dir * box.rotation;
+  // WGSL doesn't promise that dividing by zero gives infinity, so nudge zero
+  // components to a tiny number instead. https://www.w3.org/TR/WGSL/#floating-point-evaluation
+  dir = select(dir, vec3f(1e-20), abs(dir) < vec3f(1e-20));
+
+  // The "slab" test (Kay & Kajiya, 1986). The box is where three slabs
+  // overlap, each the space between two parallel planes. Along each axis the
+  // ray is inside that slab from tNear to tFar; it's inside the box from the
+  // last of the entries to the first of the exits.
+  let tA = (-box.halfSize - origin) / dir;
+  let tB = (box.halfSize - origin) / dir;
+  let entries = min(tA, tB);
+  let exits = max(tA, tB);
+  let tEnter = max(max(entries.x, entries.y), entries.z);
+  let tExit = min(min(exits.x, exits.y), exits.z);
+  var hit = BoxHit(NO_HIT, vec3f(0.0));
+  if (tEnter > tExit || tExit < EPSILON) {
+    return hit; // the slabs never overlap along the ray, or the box is behind it
+  }
+  hit.t = select(tEnter, tExit, tEnter < EPSILON); // starting inside: where the ray leaves
+
+  // The face hit is the one the hit point is closest to, relative to the
+  // box's size along each axis.
+  let p = origin + hit.t * dir;
+  let q = abs(p) / box.halfSize;
+  var n = vec3f(0.0);
+  if (q.x >= q.y && q.x >= q.z) {
+    n.x = sign(p.x);
+  } else if (q.y >= q.z) {
+    n.y = sign(p.y);
+  } else {
+    n.z = sign(p.z);
+  }
+  hit.normal = box.rotation * n; // back to world directions
+  return hit;
+}
+
 fn intersectGround(ray: Ray) -> f32 {
   // The plane y = 0. Only rays heading downward can reach it.
-  if (ray.dir.y > -1e-6) {
+  if (scene.groundMaterial == NO_GROUND || ray.dir.y > -1e-6) {
     return NO_HIT;
   }
   let t = -ray.origin.y / ray.dir.y;
@@ -143,7 +220,7 @@ fn intersectGround(ray: Ray) -> f32 {
 var<private> rayCount: u32;
 
 // Finds the closest thing the ray hits, by testing every object. Fine for a
-// handful of objects; a real scene needs an acceleration structure (a BVH, Act 2).
+// few dozen objects; a real scene needs an acceleration structure (a BVH, Act 2).
 fn intersectScene(ray: Ray) -> Hit {
   rayCount++;
   var hit: Hit;
@@ -159,8 +236,23 @@ fn intersectScene(ray: Ray) -> Hit {
       hit.material = sphere.material;
     }
   }
+  for (var i = 0u; i < scene.boxCount; i++) {
+    let box = boxes[i];
+    let boxHit = intersectBox(ray, box);
+    if (boxHit.t < hit.t) {
+      hit.t = boxHit.t;
+      hit.normal = boxHit.normal;
+      hit.material = box.material;
+    }
+  }
   hit.position = ray.origin + hit.t * ray.dir;
   return hit;
+}
+
+// Whether anything blocks the straight line from `position` (on a surface
+// with this normal) along `dir` for `distance`.
+fn blocked(position: vec3f, normal: vec3f, dir: vec3f, distance: f32) -> bool {
+  return intersectScene(Ray(position + normal * EPSILON, dir)).t < distance;
 }
 
 // ---- Random numbers ------------------------------------------------------
@@ -209,9 +301,8 @@ fn perpendiculars(n: vec3f) -> mat2x3f {
 }
 
 // ---- Sun and sky ---------------------------------------------------------
-// How much the sun lights a surface facing it, per unit of albedo. Brighter
-// than 1: tone mapping handles it.
-const SUN_COLOR = vec3f(1.6, 1.52, 1.36);
+// The scene sets the sun's color and brightness (scene.sunColor): how much it
+// lights a surface facing it, per unit of albedo.
 // The sun's real size seen from Earth: about 0.53° across, so 0.27° = 0.00465
 // radians from its center to its edge. It sets both the disk in the sky and
 // how soft the path tracer's shadows are.
@@ -243,22 +334,148 @@ fn sampleSunDirection(toSun: vec3f) -> vec3f {
 fn sky(dir: vec3f, toSun: vec3f, withSunDisk: bool) -> vec3f {
   let horizon = vec3f(0.62, 0.74, 0.9);
   let zenith = vec3f(0.1, 0.27, 0.7);
-  var color = mix(horizon, zenith, sqrt(max(dir.y, 0.0)));
+  var color = mix(horizon, zenith, sqrt(max(dir.y, 0.0))) * scene.skyStrength;
   let towardSun = dot(dir, toSun); // 1 when looking straight at the sun
   if (withSunDisk) {
     let edge = cos(SUN_ANGULAR_RADIUS);
-    color += SUN_COLOR * 4.0 * smoothstep(edge - 2e-6, edge + 2e-6, towardSun); // the disk
+    color += scene.sunColor * 4.0 * smoothstep(edge - 2e-6, edge + 2e-6, towardSun); // the disk
   }
-  color += SUN_COLOR * 0.15 * pow(max(towardSun, 0.0), 64.0); // glow around it
+  color += scene.sunColor * 0.15 * pow(max(towardSun, 0.0), 64.0); // glow around it
   return color;
 }
 
 // The sun is so far away that anything a shadow ray hits counts as blocking it.
 fn inShadow(position: vec3f, normal: vec3f, toSun: vec3f) -> bool {
-  let shadowRay = Ray(position + normal * EPSILON, toSun);
-  return intersectScene(shadowRay).t < NO_HIT;
+  return blocked(position, normal, toSun, NO_HIT);
 }
 
+// ---- Glowing objects -----------------------------------------------------
+// A random point on one of the glowing objects, for a shadow ray.
+struct LightSample {
+  position: vec3f,
+  normal: vec3f, // pointing out of the light's surface
+  emission: vec3f, // the light given off there
+  area: f32, // the light's whole surface area
+  probability: f32, // of having picked this light
+}
+
+// Picks a light in proportion to the light it gives off (findLights() in
+// scene.ts sets the odds), then a point spread evenly over its surface.
+fn sampleLight() -> LightSample {
+  let u = random();
+  var picked = lights[scene.lightCount - 1u];
+  for (var i = 0u; i < scene.lightCount; i++) {
+    if (u < lights[i].cdf) {
+      picked = lights[i];
+      break;
+    }
+  }
+
+  var s: LightSample;
+  s.probability = picked.probability;
+  if (picked.kind == LIGHT_SPHERE) {
+    let sphere = spheres[picked.index];
+    s.normal = randomUnitVector();
+    s.position = sphere.center + s.normal * sphere.radius;
+    s.area = 4.0 * PI * sphere.radius * sphere.radius;
+    s.emission = materials[sphere.material].emission;
+  } else {
+    // A box: pick one of its six faces in proportion to its area, then a
+    // point on that face, in the box's own coordinates.
+    let box = boxes[picked.index];
+    let h = box.halfSize;
+    let faceAreas = vec3f(h.y * h.z, h.x * h.z, h.x * h.y) * 4.0; // the faces across x, y and z
+    s.area = 2.0 * (faceAreas.x + faceAreas.y + faceAreas.z);
+    let side = select(-1.0, 1.0, random() < 0.5);
+    let along = vec2f(random(), random()) * 2.0 - 1.0; // -1..1 across the face
+    let pick = random() * (faceAreas.x + faceAreas.y + faceAreas.z);
+    var local: vec3f;
+    var n: vec3f;
+    if (pick < faceAreas.x) {
+      local = vec3f(side * h.x, along.x * h.y, along.y * h.z);
+      n = vec3f(side, 0.0, 0.0);
+    } else if (pick < faceAreas.x + faceAreas.y) {
+      local = vec3f(along.x * h.x, side * h.y, along.y * h.z);
+      n = vec3f(0.0, side, 0.0);
+    } else {
+      local = vec3f(along.x * h.x, along.y * h.y, side * h.z);
+      n = vec3f(0.0, 0.0, side);
+    }
+    s.position = box.center + box.rotation * local;
+    s.normal = box.rotation * n;
+    s.emission = materials[box.material].emission;
+  }
+  return s;
+}
+
+// The light one glowing object adds to a matte point, estimated from one
+// random point on it. Light from a small patch of the glowing surface falls
+// off with the square of the distance, and with the angle at each end: a
+// surface facing the light at a slant catches less of it (cosSurface), and
+// a patch seen edge-on shows less of itself (cosLight).
+fn lightFromObjects(position: vec3f, normal: vec3f) -> vec3f {
+  if (scene.lightCount == 0u) {
+    return vec3f(0.0);
+  }
+  let s = sampleLight();
+  let toLight = s.position - position;
+  let distanceSquared = dot(toLight, toLight);
+  let distance = sqrt(distanceSquared);
+  let dir = toLight / distance;
+  let cosSurface = dot(normal, dir);
+  let cosLight = -dot(s.normal, dir);
+  if (cosSurface <= 0.0 || cosLight <= 0.0) {
+    return vec3f(0.0); // the point faces away, or the patch faces away from the point
+  }
+  // Stop just short of the light, so its own surface doesn't count as a blocker.
+  if (blocked(position, normal, dir, distance * (1.0 - 1e-3))) {
+    return vec3f(0.0);
+  }
+  // Dividing by the chance of picking this light and this point (1/area)
+  // makes the estimate right on average. The 1/π belongs to a matte surface,
+  // which spreads what it reflects over a hemisphere.
+  return s.emission * cosSurface * cosLight * s.area / (PI * distanceSquared * s.probability);
+}
+
+// Whitted's version: each glowing object as a single point of light at its
+// center, so shadows are hard and there's no bounce light. On average a
+// convex object shows a quarter of its surface area from any direction
+// (Cauchy's formula), which sets how bright that point is.
+fn lightFromObjectsWhitted(position: vec3f, normal: vec3f) -> vec3f {
+  var total = vec3f(0.0);
+  for (var i = 0u; i < scene.lightCount; i++) {
+    let light = lights[i];
+    var center: vec3f;
+    var reach: f32; // how far the object's surface sticks out from its center
+    var area: f32;
+    var emission: vec3f;
+    if (light.kind == LIGHT_SPHERE) {
+      let sphere = spheres[light.index];
+      center = sphere.center;
+      reach = sphere.radius;
+      area = 4.0 * PI * sphere.radius * sphere.radius;
+      emission = materials[sphere.material].emission;
+    } else {
+      let box = boxes[light.index];
+      let h = box.halfSize;
+      center = box.center;
+      reach = length(h);
+      area = 8.0 * (h.x * h.y + h.y * h.z + h.x * h.z);
+      emission = materials[box.material].emission;
+    }
+    let toLight = center - position;
+    let distanceSquared = dot(toLight, toLight);
+    let distance = sqrt(distanceSquared);
+    let dir = toLight / distance;
+    let cosSurface = dot(normal, dir);
+    if (cosSurface > 0.0 && !blocked(position, normal, dir, distance - reach)) {
+      total += emission * cosSurface * (area / 4.0) / (PI * distanceSquared);
+    }
+  }
+  return total;
+}
+
+// ---- Surfaces ------------------------------------------------------------
 // The color a surface reflects: a matte surface's albedo, or a mirror's tint.
 fn surfaceColor(material: Material, position: vec3f) -> vec3f {
   if (material.kind == KIND_CHECKER) {
@@ -285,18 +502,21 @@ fn traceWhitted(primary: Ray) -> vec3f {
   // How much of the light found further along reaches the camera. Starts at
   // 1 and is reduced by each mirror bounce (no mirror is perfect).
   var throughput = vec3f(1.0);
+  var color = vec3f(0.0);
 
   for (var bounce = 0; bounce < MAX_MIRROR_BOUNCES; bounce++) {
     let hit = intersectScene(ray);
     if (hit.t >= NO_HIT) {
-      return throughput * sky(ray.dir, toSun, true);
+      return color + throughput * sky(ray.dir, toSun, true);
     }
 
     let material = materials[hit.material];
+    color += throughput * material.emission; // glowing surfaces show their own light
+    let reflected = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
     if (material.kind == KIND_MIRROR) {
       // Perfect mirror: reflect the direction about the normal and continue.
       throughput *= material.colorA; // the tint
-      ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
+      ray = reflected;
       continue;
     }
 
@@ -305,22 +525,31 @@ fn traceWhitted(primary: Ray) -> vec3f {
     let cosine = max(dot(hit.normal, toSun), 0.0);
     var direct = vec3f(0.0);
     if (cosine > 0.0 && !inShadow(hit.position, hit.normal, toSun)) {
-      direct = SUN_COLOR * cosine;
+      direct = scene.sunColor * cosine;
     }
+    direct += lightFromObjectsWhitted(hit.position, hit.normal);
     // Whitted ray tracing has no bounce light, so light arriving from the sky
     // and from other surfaces is faked with a constant "ambient" term.
-    let ambient = vec3f(0.16, 0.2, 0.28) * (0.5 + 0.5 * hit.normal.y);
+    let ambient = vec3f(0.16, 0.2, 0.28) * (0.5 + 0.5 * hit.normal.y) * scene.skyStrength;
     let surface = surfaceColor(material, hit.position) * (direct + ambient);
-    return throughput * haze(surface, hit.t, ray.dir, toSun);
+    // A mirror coat reflects part of the light; the rest is the matte color.
+    let coat = material.reflectivity;
+    color += throughput * (1.0 - coat) * haze(surface, hit.t, ray.dir, toSun);
+    if (coat <= 0.0) {
+      return color;
+    }
+    throughput *= coat;
+    ray = reflected;
   }
-  return vec3f(0.0); // ran out of bounces between mirrors
+  return color; // ran out of bounces between mirrors
 }
 
 // ---- Renderer 2: path tracer (C1) ----------------------------------------
 // Follows one random path of light backwards from the camera. At each matte
-// surface it adds the sunlight arriving there (via a shadow ray) and then
-// bounces on in a random direction, until the path escapes to the sky
-// (which adds the sky's light) or ends.
+// surface it adds the light arriving there directly from the sun and the
+// glowing objects (via shadow rays) and then bounces on in a random
+// direction, until the path escapes to the sky (which adds the sky's light)
+// or ends.
 const MAX_PATH_BOUNCES = 8u;
 
 fn tracePath(primary: Ray) -> vec3f {
@@ -329,7 +558,10 @@ fn tracePath(primary: Ray) -> vec3f {
   var throughput = vec3f(1.0);
   var light = vec3f(0.0); // gathered so far
   var firstHitDistance = NO_HIT;
-  var sunDiskVisible = true; // until the first matte bounce; see sky()
+  // Whether this ray should count light sources it hits directly: true for
+  // camera rays and mirror reflections, false after a matte bounce, whose
+  // shadow rays already counted them (the same rule as the sun disk in sky()).
+  var countLights = true;
 
   for (var bounce = 0u; bounce < MAX_PATH_BOUNCES; bounce++) {
     let hit = intersectScene(ray);
@@ -339,37 +571,58 @@ fn tracePath(primary: Ray) -> vec3f {
     if (hit.t >= NO_HIT) {
       // The path escaped: the sky is a light source, so whatever it shows in
       // this direction is light arriving along the path.
-      light += throughput * sky(ray.dir, toSun, sunDiskVisible);
+      light += throughput * sky(ray.dir, toSun, countLights);
       break;
     }
 
     let material = materials[hit.material];
+    if (countLights) {
+      light += throughput * material.emission;
+    }
+    let reflected = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
     if (material.kind == KIND_MIRROR) {
       throughput *= material.colorA;
-      ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
+      ray = reflected;
+      countLights = true;
       continue;
     }
 
-    // Matte surface. First, sunlight arriving directly, through one shadow
-    // ray toward a random point on the sun ("next-event estimation"). Only
-    // sending bounce rays would find the tiny sun by chance, almost never.
+    // Matte surface, possibly with a mirror coat that reflects a share
+    // `coat` of the light. The matte part gets (1 - coat) of everything.
+    let coat = material.reflectivity;
     let albedo = surfaceColor(material, hit.position);
+
+    // First, light arriving directly, through shadow rays: one toward a
+    // random point on the sun ("next-event estimation") and one toward a
+    // random point on a glowing object. Only sending bounce rays would find
+    // the tiny sun or a small lamp by chance, almost never.
     let sunRay = sampleSunDirection(toSun);
     let cosine = dot(hit.normal, sunRay);
+    var direct = lightFromObjects(hit.position, hit.normal);
     if (cosine > 0.0 && !inShadow(hit.position, hit.normal, sunRay)) {
-      light += throughput * albedo * SUN_COLOR * cosine;
+      direct += scene.sunColor * cosine;
+    }
+    light += throughput * (1.0 - coat) * albedo * direct;
+
+    // Then continue the path. With probability `coat` it reflects off the
+    // coat like a mirror; otherwise it bounces off the matte surface. Choosing
+    // one at random, with exactly those odds, is right on average.
+    if (random() < coat) {
+      ray = reflected;
+      countLights = true; // the coat's reflection of a light isn't covered by shadow rays
+      continue;
     }
 
-    // Then bounce. A matte surface scatters light more toward its normal
-    // than sideways (Lambert's cosine law again), so directions near the
-    // normal are chosen more often: a random point on a unit sphere resting
-    // on the surface gives exactly that spread ("cosine-weighted"). With the
-    // directions spread that way, each bounce just multiplies by the albedo.
+    // A matte surface scatters light more toward its normal than sideways
+    // (Lambert's cosine law again), so directions near the normal are chosen
+    // more often: a random point on a unit sphere resting on the surface gives
+    // exactly that spread ("cosine-weighted"). With the directions spread that
+    // way, each bounce just multiplies by the albedo.
     let scatter = hit.normal + randomUnitVector();
     let dir = select(normalize(scatter), hit.normal, dot(scatter, scatter) < 1e-8);
     throughput *= albedo;
     ray = Ray(hit.position + hit.normal * EPSILON, dir);
-    sunDiskVisible = false;
+    countLights = false;
 
     // Russian roulette: after a few bounces, end paths at random, more often
     // the less light they can still carry, and brighten the survivors to make

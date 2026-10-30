@@ -59,31 +59,36 @@
    - Also in chunk 2: the **Renderer menu** keeps the Whitted tracer selectable (decided; it was step 13), replacing the layer switches, and **GPU timing** moved here from chunk 5 (step 12).
    - Known gaps: no caustics, and the painted sky is brighter than a real one next to the sun, so shadows look a little washed out.
 
-*Chunk 3: boxes, glowing objects and the Cornell box*
+*Chunk 3: boxes, glowing objects and a night scene (done, except the Cornell box)*
 
-6. **Boxes,** with a center, a size and a rotation. Each ray is turned into the box's own coordinates, where the box is axis-aligned, and tested with the "slab" method. The ground plane becomes optional, since a room has its own floor.
+6. **Boxes,** with a center, a size and a rotation (any angles about x, y and z). Each ray is turned into the box's own coordinates, where the box is axis-aligned, and tested with the "slab" method. The ground plane becomes optional, since a room has its own floor.
 7. **Glowing objects:** any sphere or box can give off light, set by an `emission` color and strength in its material.
    - There's no separate light object. The sun stays the one special light, because it's infinitely far away.
-   - The renderer keeps a list of glowing objects and aims shadow rays at them ("light sampling"). Rays that only find a small light by chance would make a very noisy image.
-8. **The Cornell box,** a small room with a red wall, a green wall and a light panel in the ceiling. It's the standard test for bounce light, and the reference scene for the rest of C1.
-   - It's built from the measurements Cornell published. Their original data page now redirects elsewhere (checked 2026-10-29), so the numbers need another source, such as an archived copy.
+   - The renderer keeps a list of glowing objects and aims shadow rays at them ("light sampling"), picking brighter and bigger ones more often. Rays that only find a small light by chance would make a very noisy image.
+   - The Whitted renderer treats each glowing object as a single point of light, with hard shadows and no bounce light, for comparison.
+   - Also in chunk 3: **per-scene sun and sky** (brightness and color, an early piece of the "per-scene sun and sky" candidate), and a **mirror coat** on matte materials (`reflectivity`), an early piece of chunk 4's materials.
+8. **The `neon-night` scene** (instead of the Cornell box, for now): a bright bluish moon (a fifth of daylight), a hot-pink neon sign floating in the sky as the main light, three puddles, a field of 36 small mirror balls, and grey asphalt with a 2% mirror sheen.
+   - Check: pink light pooling under the sign, soft shadows behind the balls, the sign reflected in a puddle and faintly in the asphalt.
+   - It costs about 16.5 ms of GPU time per sample at 1280×800 on an Intel Iris Xe laptop: every ray is tested against all 40 objects. This is the first scene where a BVH (Act 2) would clearly pay off.
+9. **The Cornell box** (deferred): a small room with a red wall, a green wall and a light panel in the ceiling, the standard test for bounce light.
+   - It's built from the measurements Cornell published. Their original data page now redirects elsewhere (checked 2026-10-29), so the numbers need another source, such as a reproduction in a well-known open renderer's test scenes.
    - Check: red and green light on the white walls, and soft shadows under the blocks.
 
 *Chunk 4: real materials*
 
-9. **One parameterized material instead of kinds.** It follows glTF's material model, so imported models map straight onto it in Act 2.
+10. **One parameterized material instead of kinds.** It follows glTF's material model, so imported models map straight onto it in Act 2.
    - Parameters: `baseColor`, `roughness`, `metallic`, `transmission`, `ior` and `emission` (from step 7), with defaults so scene files stay short.
    - The path tracer samples each one: matte, rough or smooth metal (GGX microfacet), and glass (refraction with Fresnel).
    - "Checker" stops being a material kind and becomes a pattern on `baseColor`.
-10. **A first-person camera:** done early, as a floating "Fly" camera (WASD, Q/E, drag to look, all the way around) next to the orbit camera. Still open: pointer lock for mouse look, walking with gravity and collisions for the dreamspace, and letting each scene choose its starting camera.
-11. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled room or hallway with a pool, lit by glowing ceiling panels and daylight through an opening. It uses every material: glass or water, rough and smooth metal, matte, and glowing surfaces. Tiles are checker patterns until image textures arrive.
+11. **A first-person camera:** done early, as a floating "Fly" camera (WASD, Q/E, drag to look, all the way around) next to the orbit camera. Still open: pointer lock for mouse look, walking with gravity and collisions for the dreamspace, and letting each scene choose its starting camera.
+12. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled room or hallway with a pool, lit by glowing ceiling panels and daylight through an opening. It uses every material: glass or water, rough and smooth metal, matte, and glowing surfaces. Tiles are checker patterns until image textures arrive.
     - Check: standing still inside it, the room refines into an image that could pass for a photo.
 
 *Chunk 5: measuring and explaining*
 
-12. ~~GPU timing~~: done early, in chunk 2. The HUD shows p50/p95/p99 GPU time where the browser offers `timestamp-query`.
-13. ~~Keep the Whitted tracer selectable~~: done in chunk 2, as the Renderer menu.
-14. Finish the learning note `docs/learn/C1.md`.
+13. ~~GPU timing~~: done early, in chunk 2. The HUD shows p50/p95/p99 GPU time where the browser offers `timestamp-query`.
+14. ~~Keep the Whitted tracer selectable~~: done in chunk 2, as the Renderer menu.
+15. Finish the learning note `docs/learn/C1.md`.
 
 **Done when:**
 - a still camera converges to a clean image with soft shadows and color bleeding;

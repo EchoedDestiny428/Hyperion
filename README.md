@@ -40,7 +40,7 @@ To preview the "can't run here" messages, add `?simulate=no-webgpu`, `?simulate=
 
 Pick a scene layout from the menu in the bottom-left corner, or open one directly with `?scene=ball-test-1`. Layouts are plain data in [`src/scene/layouts/`](src/scene/layouts/). To add one, create a file there and list it in `src/scene/registry.ts`.
 
-Some scenes have sliders under the Scene menu; `shadow-heights` lifts a ball to show how shadows soften with height.
+Some scenes have sliders under the Scene menu; `shadow-heights` lifts a ball to show how shadows soften with height. `neon-night` is lit by a glowing neon sign, with puddles and a field of mirror balls.
 
 The **Renderer** panel in the top-right corner switches between the C0 Whitted ray tracer and the C1 path tracer, picks the camera, and shows debug views such as normals, shadows and rays per pixel. Its anti-aliasing controls set how many samples each pixel averages, and can add them one at a time; the `aliasing-test` scene shows the difference best. The HUD in the top-left shows how long the GPU spends per frame, where the browser can measure it.
 

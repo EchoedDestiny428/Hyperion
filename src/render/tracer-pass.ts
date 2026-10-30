@@ -15,10 +15,14 @@ export interface TracerPass {
   ): void;
 }
 
-// The GPU copy of one scene.
+// The GPU copy of one scene: one buffer per part of packScene()'s result.
 interface SceneBuffers {
   scene: Scene;
-  buffers: GPUBuffer[]; // info, spheres, materials
+  info: GPUBuffer;
+  spheres: GPUBuffer;
+  materials: GPUBuffer;
+  boxes: GPUBuffer;
+  lights: GPUBuffer;
 }
 
 // The running total of samples, one vec4f (16 bytes) per pixel.
@@ -71,14 +75,18 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
         accumulation = createAccumulation(device, params.width, params.height, accumulation);
         bindGroup = null;
       }
-      // Binding 0 is the per-frame values, 1-3 the scene, 4 the running total.
+      // The binding numbers match the @binding(n) declarations in tracer.wgsl.
       bindGroup ??= device.createBindGroup({
         label: `tracer · ${scene.name}`,
         layout: pipeline.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: uniformBuffer } },
-          ...sceneBuffers.buffers.map((buffer, i) => ({ binding: i + 1, resource: { buffer } })),
+          { binding: 1, resource: { buffer: sceneBuffers.info } },
+          { binding: 2, resource: { buffer: sceneBuffers.spheres } },
+          { binding: 3, resource: { buffer: sceneBuffers.materials } },
           { binding: 4, resource: { buffer: accumulation.buffer } },
+          { binding: 5, resource: { buffer: sceneBuffers.boxes } },
+          { binding: 6, resource: { buffer: sceneBuffers.lights } },
         ],
       });
 
@@ -102,16 +110,25 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
 
 function uploadScene(device: GPUDevice, scene: Scene, previous: SceneBuffers | null): SceneBuffers {
   const packed = packScene(scene);
-  const buffers = [
-    createBufferWithData(device, `${scene.name} info`, packed.info, GPUBufferUsage.UNIFORM),
-    createBufferWithData(device, `${scene.name} spheres`, packed.spheres, GPUBufferUsage.STORAGE),
-    createBufferWithData(device, `${scene.name} materials`, packed.materials, GPUBufferUsage.STORAGE),
-  ];
+  const storage = (part: string, data: ArrayBuffer): GPUBuffer =>
+    createBufferWithData(device, `${scene.name} ${part}`, data, GPUBufferUsage.STORAGE);
+  const uploaded: SceneBuffers = {
+    scene,
+    info: createBufferWithData(device, `${scene.name} info`, packed.info, GPUBufferUsage.UNIFORM),
+    spheres: storage('spheres', packed.spheres),
+    materials: storage('materials', packed.materials),
+    boxes: storage('boxes', packed.boxes),
+    lights: storage('lights', packed.lights),
+  };
   // Frames already submitted still finish with the old buffers: destroy()
   // only frees their memory once the GPU is done with them.
   // https://www.w3.org/TR/webgpu/#dom-gpubuffer-destroy
-  for (const buffer of previous?.buffers ?? []) buffer.destroy();
-  return { scene, buffers };
+  if (previous) {
+    for (const buffer of [previous.info, previous.spheres, previous.materials, previous.boxes, previous.lights]) {
+      buffer.destroy();
+    }
+  }
+  return uploaded;
 }
 
 // The running total needs no initial contents: the first sample after any
