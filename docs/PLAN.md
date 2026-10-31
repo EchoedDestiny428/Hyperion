@@ -1,6 +1,6 @@
 # Hyperion plan
 
-> Draft, 2026-10-28. Rebuilt from the code comments and README, because the original plan was lost. Items marked *proposed* aren't decided yet.
+> Draft, 2026-10-28. Rebuilt from the code comments and README, because the original plan wasn't available at the time. The original has since been recovered as [`PLAN-archive.md`](PLAN-archive.md), which keeps its research, decisions and loading milestones; this file takes priority where they differ. Items marked *proposed* aren't decided yet.
 
 **Goal:** a WebGPU tech demo. First, real-time path tracing in the browser. Then, large scenes that load in seconds.
 
