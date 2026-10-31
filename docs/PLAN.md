@@ -67,12 +67,22 @@
    - The renderer keeps a list of glowing objects and aims shadow rays at them ("light sampling"), picking brighter and bigger ones more often. Rays that only find a small light by chance would make a very noisy image.
    - The Whitted renderer treats each glowing object as a single point of light, with hard shadows and no bounce light, for comparison.
    - Also in chunk 3: **per-scene sun and sky** (brightness and color, an early piece of the "per-scene sun and sky" candidate), and a **mirror coat** on matte materials (`reflectivity`), an early piece of chunk 4's materials.
-8. **The `neon-night` scene** (instead of the Cornell box, for now): a bright bluish moon (a fifth of daylight), a hot-pink neon sign floating in the sky as the main light, three puddles, a field of 36 small mirror balls, and grey asphalt with a 2% mirror sheen.
-   - Check: pink light pooling under the sign, soft shadows behind the balls, the sign reflected in a puddle and faintly in the asphalt.
+8. **The `neon-night` scene** (instead of the Cornell box, for now): a bright bluish moon (a fifth of daylight), a hot-pink neon sign floating in the sky as the main light, three puddles, a field of 36 small mirror balls, and plain grey asphalt.
+   - Check: pink light pooling under the sign, soft shadows behind the balls, the sign reflected in a puddle.
    - It costs about 16.5 ms of GPU time per sample at 1280×800 on an Intel Iris Xe laptop: every ray is tested against all 40 objects. This is the first scene where a BVH (Act 2) would clearly pay off.
 9. **The Cornell box** (deferred): a small room with a red wall, a green wall and a light panel in the ceiling, the standard test for bounce light.
    - It's built from the measurements Cornell published. Their original data page now redirects elsewhere (checked 2026-10-29), so the numbers need another source, such as a reproduction in a well-known open renderer's test scenes.
    - Check: red and green light on the white walls, and soft shadows under the blocks.
+
+*Optimization pass (in progress, before chunk 4)*
+
+The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on battery. Every step is measured with `npm run benchmark -- --against <before build>`, and only a clear change bigger than about 5% counts.
+
+- Done: a benchmark that alternates two builds in one session, because identical code measured in separate runs differed by up to 13%.
+- Done: work out a hit's normal only for the final closest object. 14–23% less GPU time on every scene, with identical images.
+- Tried and dropped: "any hit" shadow rays that stop at the first blocker. No gain in these open scenes, where most shadow rays are never blocked. Retest once there's a BVH.
+- Tried and dropped: separate shaders per renderer and view. Even a shader holding only the path tracer showed no clear gain.
+- Next: a BVH over spheres and boxes, pulled forward from Act 2; lower resolution while the camera moves; light sampling that skips box faces pointing away.
 
 *Chunk 4: real materials*
 
@@ -80,6 +90,7 @@
    - Parameters: `baseColor`, `roughness`, `metallic`, `transmission`, `ior` and `emission` (from step 7), with defaults so scene files stay short.
    - The path tracer samples each one: matte, rough or smooth metal (GGX microfacet), and glass (refraction with Fresnel).
    - "Checker" stops being a material kind and becomes a pattern on `baseColor`.
+   - Wet asphalt for `neon-night`: reflections blurred by roughness, and strong only at low angles (Fresnel). A plain mirror coat looked wrong there.
 11. **A first-person camera:** done early, as a floating "Fly" camera (WASD, Q/E, drag to look, all the way around) next to the orbit camera. Still open: pointer lock for mouse look, walking with gravity and collisions for the dreamspace, and letting each scene choose its starting camera.
 12. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled room or hallway with a pool, lit by glowing ceiling panels and daylight through an opening. It uses every material: glass or water, rough and smooth metal, matte, and glowing surfaces. Tiles are checker patterns until image textures arrive.
     - Check: standing still inside it, the room refines into an image that could pass for a photo.
@@ -157,7 +168,7 @@
 
 ## Open questions
 
-- **Performance targets:** which hardware, and what frame rate counts as "real time" for path tracing here?
+- **Performance targets:** the hardware target is an everyday integrated laptop GPU; what frame rate counts as "real time" for path tracing here is still open.
 - **Act 2 test scenes:** which large scenes, with licenses that allow redistribution?
 - **Hosting:** where the public demo will live (it needs HTTPS for WebGPU).
 - **Load-time target:** what "loads in seconds" means as a number, and on what connection.

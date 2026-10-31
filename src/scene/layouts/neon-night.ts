@@ -30,11 +30,14 @@ export const neonNight: Scene = {
   name: 'neon-night',
   camera: { target: [0.6, 1, 0], yaw: 0.45, pitch: 0.3, distance: 9 },
   // A bright moon stands in for the sun: a fifth as bright as daylight and a
-  // little blue, in a sky about 1/80 as bright as day.
-  environment: { sun: [0.26, 0.305, 0.445], sky: 0.012 },
+  // little blue. A bright moon lights the sky too, or the ground would look
+  // brighter than the sky above it.
+  environment: { sun: [0.26, 0.305, 0.445], sky: 0.06 },
   materials: {
-    // Wet asphalt: grey, mostly matte, with a faint mirror sheen.
-    asphalt: { kind: 'diffuse', albedo: [0.32, 0.32, 0.33], reflectivity: 0.02 },
+    // Plain matte for now. A mirror coat looked wrong here: real wet asphalt
+    // blurs reflections and fades them when seen from above, which needs
+    // chunk 4's roughness and Fresnel.
+    asphalt: { kind: 'diffuse', albedo: [0.32, 0.32, 0.33] },
     // Almost no green: very bright light washes out toward white on screen
     // (as neon does in photos), and any green would make it pale.
     neon: { kind: 'diffuse', albedo: [0.05, 0.05, 0.05], emission: { color: [1, 0.01, 0.5], strength: 16 } },

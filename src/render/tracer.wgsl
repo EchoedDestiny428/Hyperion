@@ -131,6 +131,7 @@ struct Hit {
 }
 
 const NO_HIT = 1e30;
+const NO_OBJECT = 4294967295u; // 0xffffffff: not an index into spheres or boxes
 // New rays start this far off the surface. Otherwise rounding error can make
 // a ray immediately re-hit the surface it left ("shadow acne").
 const EPSILON = 1e-3;
@@ -158,41 +159,43 @@ fn intersectSphere(ray: Ray, sphere: Sphere) -> f32 {
   return t;
 }
 
-struct BoxHit {
-  t: f32,
-  normal: vec3f,
-}
-
-fn intersectBox(ray: Ray, box: Box) -> BoxHit {
-  // Move the ray into the box's own coordinates, where the box is centered
-  // at the origin and lined up with the axes: undo the move, then the
-  // rotation. A rotation matrix's inverse is its transpose, and `v * m`
-  // multiplies by the transpose.
+// The ray in the box's own coordinates, where the box is centered at the
+// origin and lined up with the axes: undo the move, then the rotation. A
+// rotation matrix's inverse is its transpose, and `v * m` multiplies by the
+// transpose.
+fn rayInBoxSpace(ray: Ray, box: Box) -> Ray {
   let origin = (ray.origin - box.center) * box.rotation;
-  var dir = ray.dir * box.rotation;
+  let dir = ray.dir * box.rotation;
   // WGSL doesn't promise that dividing by zero gives infinity, so nudge zero
   // components to a tiny number instead. https://www.w3.org/TR/WGSL/#floating-point-evaluation
-  dir = select(dir, vec3f(1e-20), abs(dir) < vec3f(1e-20));
+  return Ray(origin, select(dir, vec3f(1e-20), abs(dir) < vec3f(1e-20)));
+}
+
+fn intersectBox(ray: Ray, box: Box) -> f32 {
+  let local = rayInBoxSpace(ray, box);
 
   // The "slab" test (Kay & Kajiya, 1986). The box is where three slabs
   // overlap, each the space between two parallel planes. Along each axis the
   // ray is inside that slab from tNear to tFar; it's inside the box from the
   // last of the entries to the first of the exits.
-  let tA = (-box.halfSize - origin) / dir;
-  let tB = (box.halfSize - origin) / dir;
+  let tA = (-box.halfSize - local.origin) / local.dir;
+  let tB = (box.halfSize - local.origin) / local.dir;
   let entries = min(tA, tB);
   let exits = max(tA, tB);
   let tEnter = max(max(entries.x, entries.y), entries.z);
   let tExit = min(min(exits.x, exits.y), exits.z);
-  var hit = BoxHit(NO_HIT, vec3f(0.0));
   if (tEnter > tExit || tExit < EPSILON) {
-    return hit; // the slabs never overlap along the ray, or the box is behind it
+    return NO_HIT; // the slabs never overlap along the ray, or the box is behind it
   }
-  hit.t = select(tEnter, tExit, tEnter < EPSILON); // starting inside: where the ray leaves
+  return select(tEnter, tExit, tEnter < EPSILON); // starting inside: where the ray leaves
+}
 
-  // The face hit is the one the hit point is closest to, relative to the
-  // box's size along each axis.
-  let p = origin + hit.t * dir;
+// The direction of the box's surface where the ray meets it at distance `t`.
+// The face hit is the one the point is closest to, relative to the box's size
+// along each axis.
+fn boxNormal(ray: Ray, box: Box, t: f32) -> vec3f {
+  let local = rayInBoxSpace(ray, box);
+  let p = local.origin + t * local.dir;
   let q = abs(p) / box.halfSize;
   var n = vec3f(0.0);
   if (q.x >= q.y && q.x >= q.z) {
@@ -202,8 +205,7 @@ fn intersectBox(ray: Ray, box: Box) -> BoxHit {
   } else {
     n.z = sign(p.z);
   }
-  hit.normal = box.rotation * n; // back to world directions
-  return hit;
+  return box.rotation * n; // back to world directions
 }
 
 fn intersectGround(ray: Ray) -> f32 {
@@ -227,25 +229,36 @@ fn intersectScene(ray: Ray) -> Hit {
   hit.t = intersectGround(ray);
   hit.normal = vec3f(0.0, 1.0, 0.0);
   hit.material = scene.groundMaterial;
+
+  // Only remember which object is closest so far. Its normal is worked out
+  // once at the end, since a closer object may yet replace it.
+  var closestSphere = NO_OBJECT;
+  var closestBox = NO_OBJECT;
   for (var i = 0u; i < scene.sphereCount; i++) {
-    let sphere = spheres[i];
-    let t = intersectSphere(ray, sphere);
+    let t = intersectSphere(ray, spheres[i]);
     if (t < hit.t) {
       hit.t = t;
-      hit.normal = normalize(ray.origin + t * ray.dir - sphere.center);
-      hit.material = sphere.material;
+      closestSphere = i;
     }
   }
   for (var i = 0u; i < scene.boxCount; i++) {
-    let box = boxes[i];
-    let boxHit = intersectBox(ray, box);
-    if (boxHit.t < hit.t) {
-      hit.t = boxHit.t;
-      hit.normal = boxHit.normal;
-      hit.material = box.material;
+    let t = intersectBox(ray, boxes[i]);
+    if (t < hit.t) {
+      hit.t = t;
+      closestBox = i;
     }
   }
+
   hit.position = ray.origin + hit.t * ray.dir;
+  if (closestBox != NO_OBJECT) {
+    let box = boxes[closestBox];
+    hit.normal = boxNormal(ray, box, hit.t);
+    hit.material = box.material;
+  } else if (closestSphere != NO_OBJECT) {
+    let sphere = spheres[closestSphere];
+    hit.normal = normalize(hit.position - sphere.center);
+    hit.material = sphere.material;
+  }
   return hit;
 }
 

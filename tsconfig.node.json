@@ -1,11 +1,11 @@
 {
-  // Unit tests run in Node, so they also see Node's types (node:test,
-  // node:assert). Browser code is checked by tsconfig.app.json without them,
-  // so it can't accidentally use Node-only APIs.
+  // Unit tests and scripts run in Node, so they also see Node's types
+  // (node:test, node:assert). Browser code is checked by tsconfig.app.json
+  // without them, so it can't accidentally use Node-only APIs.
   "extends": "./tsconfig.app.json",
   "compilerOptions": {
     "types": ["@types/web", "@types/node"]
   },
-  "include": ["src/**/*.test.ts", "src/**/*.d.ts"],
+  "include": ["src/**/*.test.ts", "src/**/*.d.ts", "scripts/**/*.ts"],
   "exclude": []
 }
