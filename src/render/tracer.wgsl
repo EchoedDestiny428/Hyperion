@@ -72,7 +72,8 @@ struct Sphere {
   center: vec3f,
   radius: f32,
   material: u32, // index into materials
-  // WGSL pads this struct from 20 to 32 bytes: a struct holding a vec3f is
+  lightDensity: f32, // the chance per m² of a shadow ray aiming at a point on it; 0 if it doesn't glow
+  // WGSL pads this struct from 24 to 32 bytes: a struct holding a vec3f is
   // aligned to 16 bytes, and its size rounds up to match.
 }
 
@@ -80,6 +81,7 @@ struct Box {
   center: vec3f,
   material: u32,
   halfSize: vec3f, // half the width, height and depth, before rotating
+  lightDensity: f32, // as in Sphere
   rotation: mat3x3f, // columns: where the box's own x, y and z axes point
 }
 
@@ -93,6 +95,7 @@ struct Material {
   emission: vec3f, // light it gives off by itself; black for most materials
   metallic: f32, // 0 non-metal .. 1 metal
   ior: f32, // index of refraction
+  transmission: f32, // the share of a non-metal's light that passes through
 }
 
 // The glowing objects, for aiming shadow rays at them. Must match LIGHT_KIND
@@ -126,6 +129,7 @@ struct Hit {
   position: vec3f,
   normal: vec3f, // unit length, pointing out of the surface
   material: u32, // index into materials
+  lightDensity: f32, // as in Sphere; 0 for anything that isn't a sampled light
 }
 
 const NO_HIT = 1e30;
@@ -252,10 +256,12 @@ fn intersectScene(ray: Ray) -> Hit {
     let box = boxes[closestBox];
     hit.normal = boxNormal(ray, box, hit.t);
     hit.material = box.material;
+    hit.lightDensity = box.lightDensity;
   } else if (closestSphere != NO_OBJECT) {
     let sphere = spheres[closestSphere];
     hit.normal = normalize(hit.position - sphere.center);
     hit.material = sphere.material;
+    hit.lightDensity = sphere.lightDensity;
   }
   return hit;
 }
@@ -318,6 +324,11 @@ fn perpendiculars(n: vec3f) -> mat2x3f {
 // radians from its center to its edge. It sets both the disk in the sky and
 // how soft the path tracer's shadows are.
 const SUN_ANGULAR_RADIUS = 0.00465;
+// The size of the disk as seen from the ground, in steradians (the area of a
+// patch on a sphere of radius 1), and so the chance density of a shadow ray
+// aimed at the sun going in any one direction across it.
+const SUN_SOLID_ANGLE = 2.0 * PI * (1.0 - cos(SUN_ANGULAR_RADIUS));
+const SUN_PDF = 1.0 / SUN_SOLID_ANGLE;
 
 fn sunDirection() -> vec3f {
   // The sun can circle ("Sun moves") to show that shadows are computed live.
@@ -339,9 +350,9 @@ fn sampleSunDirection(toSun: vec3f) -> vec3f {
   return normalize(side[0] * (cos(angle) * sinTheta) + side[1] * (sin(angle) * sinTheta) + toSun * cosTheta);
 }
 
-// The light arriving from direction `dir`. `withSunDisk` is false for rays
-// leaving a matte surface in the path tracer: its shadow rays already count
-// the sun, and counting the disk again would add the sunlight twice.
+// The light arriving from direction `dir`. `withSunDisk` adds a painted disk,
+// bright enough to read as the sun. The path tracer leaves it out and uses
+// sunDisk instead.
 fn sky(dir: vec3f, toSun: vec3f, withSunDisk: bool) -> vec3f {
   let horizon = vec3f(0.62, 0.74, 0.9);
   let zenith = vec3f(0.1, 0.27, 0.7);
@@ -353,6 +364,16 @@ fn sky(dir: vec3f, toSun: vec3f, withSunDisk: bool) -> vec3f {
   }
   color += scene.sunColor * 0.15 * pow(max(towardSun, 0.0), 64.0); // glow around it
   return color;
+}
+
+// The sun's real brightness in direction `dir`, for the path tracer. A shadow
+// ray and a reflection must find the same sun, or multiple importance sampling
+// can't blend them. scene.sunColor × PI is the light a surface facing the sun
+// receives, so spreading it over the disk gives the disk's brightness: over
+// 10,000 times the painted disk in sky(), which is how bright the sun really
+// is next to the sky.
+fn sunDisk(dir: vec3f, toSun: vec3f) -> vec3f {
+  return select(vec3f(0.0), scene.sunColor * PI * SUN_PDF, dot(dir, toSun) >= cos(SUN_ANGULAR_RADIUS));
 }
 
 // The sun is so far away that anything a shadow ray hits counts as blocking it.
@@ -419,12 +440,12 @@ fn sampleLight() -> LightSample {
   return s;
 }
 
-// The light one glowing object adds to a matte point, estimated from one
-// random point on it. Light from a small patch of the glowing surface falls
-// off with the square of the distance, and with the angle at each end: a
-// surface facing the light at a slant catches less of it (cosSurface), and
-// a patch seen edge-on shows less of itself (cosLight).
-fn lightFromObjects(position: vec3f, normal: vec3f) -> vec3f {
+// The light one glowing object sends off a surface toward the viewer, estimated
+// from one random point on it. A patch of glowing surface looks smaller with
+// the square of the distance, and smaller again seen edge-on (cosLight). Together
+// those turn "chance per m² of the light" into "chance per direction", the
+// units scatterToward uses, so `pdf` is comparable with the surface's own.
+fn lightFromObjects(surface: Surface, position: vec3f) -> vec3f {
   if (scene.lightCount == 0u) {
     return vec3f(0.0);
   }
@@ -433,19 +454,18 @@ fn lightFromObjects(position: vec3f, normal: vec3f) -> vec3f {
   let distanceSquared = dot(toLight, toLight);
   let distance = sqrt(distanceSquared);
   let dir = toLight / distance;
-  let cosSurface = dot(normal, dir);
   let cosLight = -dot(s.normal, dir);
-  if (cosSurface <= 0.0 || cosLight <= 0.0) {
-    return vec3f(0.0); // the point faces away, or the patch faces away from the point
+  let scatter = scatterToward(surface, dir);
+  if (cosLight <= 0.0 || scatter.pdf <= 0.0) {
+    return vec3f(0.0); // the patch faces away from the point, or the point from the patch
   }
   // Stop just short of the light, so its own surface doesn't count as a blocker.
-  if (blocked(position, normal, dir, distance * (1.0 - 1e-3))) {
+  if (blocked(position, surface.normal, dir, distance * (1.0 - 1e-3))) {
     return vec3f(0.0);
   }
-  // Dividing by the chance of picking this light and this point (1/area)
-  // makes the estimate right on average. The 1/π belongs to a matte surface,
-  // which spreads what it reflects over a hemisphere.
-  return s.emission * cosSurface * cosLight * s.area / (PI * distanceSquared * s.probability);
+  // Dividing by the chance of this direction makes the estimate right on average.
+  let pdf = s.probability * distanceSquared / (s.area * cosLight);
+  return s.emission * scatter.value * misWeight(pdf, scatter.pdf) / pdf;
 }
 
 // Whitted's version: each glowing object as a single point of light at its
@@ -509,16 +529,251 @@ fn fresnel(f0: vec3f, cosine: f32) -> vec3f {
   return f0 + (1.0 - f0) * (c * c * c * c * c);
 }
 
-// The share of light a non-metal reflects like a mirror at this angle. Its f0
-// comes from the index of refraction, and is 0.04 for the usual 1.5. Only a
-// fully polished surface reflects so far, because a rough one's reflection
-// should be blurred, which isn't built yet.
-fn polishedShare(material: Material, cosine: f32) -> f32 {
-  if (material.roughness > 0.0) {
-    return 0.0;
+// Schlick's approximation needs the angle on the side where light moves
+// fastest. Inside glass (eta > 1) that's the outgoing ray's angle, from Snell's
+// law. When no such angle exists, light can't get out ("total internal
+// reflection"); this returns 0, which makes fresnel() reflect everything.
+fn outerCosine(cosine: f32, eta: f32) -> f32 {
+  if (eta <= 1.0) {
+    return cosine;
   }
+  return sqrt(max(0.0, 1.0 - eta * eta * (1.0 - cosine * cosine)));
+}
+
+// Below this roughness, a surface counts as a perfect mirror. Its reflection is
+// one exact direction, so shadow rays could never find it. It also keeps the
+// sums below clear of the limits of 32-bit numbers.
+const POLISHED_ROUGHNESS = 0.01;
+
+// A hit point, with the material's blends settled. A surface that's partly
+// metal or partly see-through is treated as all one thing at each hit, picked
+// at random with those odds, which is right on average.
+struct Surface {
+  normal: vec3f, // facing the incoming ray
+  tangents: mat2x3f, // at right angles to normal, for the GGX sums
+  toView: vec3f, // back along the incoming ray
+  cosView: f32, // 1 head-on, 0 at a grazing angle
+  albedo: vec3f, // the matte layer's color; black if it has none
+  f0: vec3f, // how much the surface reflects head-on
+  alpha: f32, // GGX's width: glTF's roughness²
+  polished: bool, // a perfect mirror: see POLISHED_ROUGHNESS
+  specularChance: f32, // how often a bounce uses the reflection; the rest go to the matte layer
+  transmits: bool, // glass: light passes through instead of reaching a matte layer
+  usesShadowRays: bool, // false where a shadow ray couldn't find anything
+  entering: bool, // false when the ray is inside the object
+  tint: vec3f, // glass: the color of light passing through
+  eta: f32, // glass: index of refraction on the ray's side ÷ on the far side; else 1
+}
+
+fn surfaceAt(material: Material, hit: Hit, ray: Ray) -> Surface {
+  var s: Surface;
+  s.entering = dot(ray.dir, hit.normal) < 0.0;
+  s.normal = select(-hit.normal, hit.normal, s.entering);
+  s.tangents = perpendiculars(s.normal);
+  s.toView = -ray.dir;
+  s.cosView = max(dot(s.normal, s.toView), 1e-5);
+  s.alpha = material.roughness * material.roughness;
+  s.polished = material.roughness < POLISHED_ROUGHNESS;
+  s.eta = 1.0;
+
+  let color = surfaceColor(material, hit.position);
+  if (material.metallic > 0.0 && random() < material.metallic) {
+    // A metal absorbs any light that enters it, so it's only a tinted
+    // reflection, with no matte layer.
+    s.f0 = color;
+    s.specularChance = 1.0;
+    s.usesShadowRays = !s.polished;
+    return s;
+  }
+
+  // A non-metal reflects the same amount of every color, a share set by its
+  // index of refraction: 0.04 for the usual 1.5.
   let r = (1.0 - material.ior) / (1.0 + material.ior);
-  return fresnel(vec3f(r * r), cosine).x;
+  s.f0 = vec3f(r * r);
+  if (material.transmission > 0.0 && random() < material.transmission) {
+    s.transmits = true;
+    s.tint = color;
+    s.eta = select(material.ior, 1.0 / material.ior, s.entering);
+    // From inside, a shadow ray would hit the object's own surface. Light that
+    // passes through bends, so a straight shadow ray can't follow it either;
+    // only rough glass's reflection, from outside, can use one.
+    s.usesShadowRays = s.entering && !s.polished;
+    return s;
+  }
+  // Under the reflection is a matte layer. Spend bounces on whichever looks
+  // brighter from here, never ignoring either: on a black floor the reflection
+  // is nearly all there is, even when it's only 4%.
+  s.albedo = color;
+  s.usesShadowRays = true;
+  let reflected = fresnel(s.f0, s.cosView).x;
+  let matte = (1.0 - reflected) * dot(color, vec3f(0.2126, 0.7152, 0.0722));
+  s.specularChance = clamp(reflected / (reflected + matte + 1e-5), 0.05, 0.95);
+  return s;
+}
+
+// The GGX distribution: the density of tiny mirrors facing `halfway`. glTF
+// writes it as α² / (π((N·H)²(α² - 1) + 1)²). This equal form uses the tiny
+// sideways parts of `halfway` directly, because working them out from N·H ≈ 1
+// would lose them to rounding on a nearly smooth surface.
+// https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specular-brdf
+fn ggxDistribution(s: Surface, halfway: vec3f) -> f32 {
+  let alpha2 = s.alpha * s.alpha;
+  let x = dot(halfway, s.tangents[0]);
+  let y = dot(halfway, s.tangents[1]);
+  let z = dot(halfway, s.normal);
+  let k = (x * x + y * y) / alpha2 + z * z;
+  return 1.0 / (PI * alpha2 * k * k);
+}
+
+// The bottom half of glTF's visibility term, for one direction. It accounts for
+// tiny mirrors hidden behind their neighbors.
+fn smithTerm(cosine: f32, alpha: f32) -> f32 {
+  let alpha2 = alpha * alpha;
+  return cosine + sqrt(alpha2 + (1.0 - alpha2) * cosine * cosine);
+}
+
+// A random tiny mirror, out of those the viewer can see. Picking only visible
+// ones means few bounces are wasted. This is the "spherical caps" method of
+// Dupuy and Benyoub (2023), listings 1 and 3: https://arxiv.org/abs/2306.05044
+fn sampleVisibleNormal(s: Surface) -> vec3f {
+  // Everything in the surface's own coordinates, where it faces +z.
+  let view = vec3f(dot(s.toView, s.tangents[0]), dot(s.toView, s.tangents[1]), s.cosView);
+  // Stretch space so that the tiny mirrors' shape becomes a plain half sphere.
+  let stretched = normalize(vec3f(view.xy * s.alpha, view.z));
+  let angle = 2.0 * PI * random();
+  let z = (1.0 - random()) * (1.0 + stretched.z) - stretched.z;
+  let r = sqrt(saturate(1.0 - z * z));
+  let halfway = vec3f(r * cos(angle), r * sin(angle), z) + stretched;
+  // Stretch back, and turn the result to point around the real normal.
+  let local = normalize(vec3f(halfway.xy * s.alpha, halfway.z));
+  return s.tangents[0] * local.x + s.tangents[1] * local.y + s.normal * local.z;
+}
+
+// What a surface does with light arriving from `dir`.
+struct Scatter {
+  value: vec3f, // how much of it heads toward the viewer, cosine included
+  pdf: f32, // the chance density of a bounce going in this direction
+}
+
+fn scatterToward(s: Surface, dir: vec3f) -> Scatter {
+  let cosDir = dot(s.normal, dir);
+  if (cosDir <= 0.0) {
+    return Scatter(vec3f(0.0), 0.0);
+  }
+  let matteChance = select(1.0 - s.specularChance, 0.0, s.transmits);
+  if (s.polished) {
+    // The mirror reflects one exact direction, which this isn't. That leaves
+    // the matte layer, under whatever the reflection took.
+    let matte = (1.0 - fresnel(s.f0, s.cosView)) * s.albedo;
+    return Scatter(matte * cosDir / PI, matteChance * cosDir / PI);
+  }
+
+  // Only tiny mirrors facing halfway between the viewer and `dir` send light
+  // from one to the other. glTF's model is D · V · F, for the share of mirrors
+  // lined up, the share not hidden, and how strongly each one reflects.
+  let halfway = normalize(s.toView + dir);
+  let f = fresnel(s.f0, outerCosine(saturate(dot(s.toView, halfway)), s.eta));
+  let d = ggxDistribution(s, halfway);
+  let viewTerm = smithTerm(s.cosView, s.alpha);
+  let specular = d * f / (viewTerm * smithTerm(cosDir, s.alpha));
+  let matte = (1.0 - f) * s.albedo / PI;
+  // Glass picks its reflection by Fresnel, in sampleGlass.
+  let reflectChance = select(s.specularChance, f.x, s.transmits);
+  // sampleVisibleNormal's density, as a density of reflected directions.
+  let reflectPdf = d / (2.0 * viewTerm);
+  return Scatter((specular + matte) * cosDir, reflectChance * reflectPdf + matteChance * cosDir / PI);
+}
+
+// Multiple importance sampling. Shadow rays and bounce rays can both find a
+// light, and each is good where the other is bad. Both results count, each
+// with this share of the credit, so nothing is counted twice. `pdf` is how
+// likely the method that found it was to go this way, and `other` is the same
+// for the method that didn't. This is the power heuristic with β = 2:
+// https://pbr-book.org/4ed/Monte_Carlo_Integration/Improving_Efficiency#MultipleImportanceSampling
+fn misWeight(pdf: f32, other: f32) -> f32 {
+  let ratio = other / pdf;
+  return 1.0 / (1.0 + ratio * ratio);
+}
+
+// Where a path goes next.
+struct Bounce {
+  ray: Ray,
+  weight: vec3f, // multiplies throughput; black ends the path
+  pdf: f32, // the direction's chance density, or 0 if shadow rays can't reach
+            // the same lights from here, so that whatever it finds counts in full
+}
+
+const NO_BOUNCE = Bounce(Ray(vec3f(0.0), vec3f(0.0)), vec3f(0.0), 0.0);
+
+fn sampleBounce(s: Surface, position: vec3f) -> Bounce {
+  if (s.transmits) {
+    return sampleGlass(s, position);
+  }
+  let start = position + s.normal * EPSILON;
+  var dir: vec3f;
+  if (random() < s.specularChance) {
+    if (s.polished) {
+      let f = fresnel(s.f0, s.cosView);
+      return Bounce(Ray(start, reflect(-s.toView, s.normal)), f / s.specularChance, 0.0);
+    }
+    dir = reflect(-s.toView, sampleVisibleNormal(s));
+  } else {
+    // A matte surface scatters light more toward its normal than sideways
+    // (Lambert's cosine law again), so directions near the normal are chosen
+    // more often: a random point on a unit sphere resting on the surface gives
+    // exactly that spread ("cosine-weighted").
+    let spread = s.normal + randomUnitVector();
+    dir = select(normalize(spread), s.normal, dot(spread, spread) < 1e-8);
+  }
+  // Either way, the reflection and the matte layer could both have picked this
+  // direction, so both count in the weight.
+  let scatter = scatterToward(s, dir);
+  if (scatter.pdf <= 0.0) {
+    return NO_BOUNCE;
+  }
+  return Bounce(Ray(start, dir), scatter.value / scatter.pdf, scatter.pdf);
+}
+
+// Glass reflects a share F of the light and lets the rest through, so a ray
+// does one or the other with exactly those odds, leaving no weight but the tint.
+// On rough glass, each tiny mirror bends the ray its own way, which is what
+// makes it frosted (Walter et al., 2007: https://www.cs.cornell.edu/~srm/publications/EGSR07-btdf.pdf).
+fn sampleGlass(s: Surface, position: vec3f) -> Bounce {
+  var facing = s.normal;
+  if (!s.polished) {
+    facing = sampleVisibleNormal(s);
+  }
+  let cosFacing = saturate(dot(s.toView, facing));
+  let f = fresnel(s.f0, outerCosine(cosFacing, s.eta)).x;
+  if (random() < f) {
+    let dir = reflect(-s.toView, facing);
+    let ray = Ray(position + s.normal * EPSILON, dir);
+    if (s.polished) {
+      return Bounce(ray, vec3f(1.0), 0.0);
+    }
+    let scatter = scatterToward(s, dir);
+    if (scatter.pdf <= 0.0) {
+      return NO_BOUNCE;
+    }
+    return Bounce(ray, scatter.value / scatter.pdf, select(0.0, scatter.pdf, s.usesShadowRays));
+  }
+
+  // refract() takes the ratio of indices, and returns zero if light can't get
+  // out, but then f is 1 and this line isn't reached.
+  // https://www.w3.org/TR/WGSL/#refract-builtin
+  let dir = refract(-s.toView, facing, s.eta);
+  let cosDir = -dot(dir, s.normal);
+  if (cosDir <= 0.0) {
+    return NO_BOUNCE; // bent back to the side it came from, by a very slanted tiny mirror
+  }
+  // Tinting on the way in only: light going all the way through shows the
+  // color once, as the glTF tint does for a thin wall. The surface hides some
+  // tiny mirrors from `dir`, as in scatterToward: 2 · cos / smithTerm.
+  var weight = select(vec3f(1.0), s.tint, s.entering);
+  if (!s.polished) {
+    weight *= 2.0 * cosDir / smithTerm(cosDir, s.alpha);
+  }
+  return Bounce(Ray(position - s.normal * EPSILON, dir), weight, 0.0);
 }
 
 // Fade distant surfaces into the sky color, like haze. In C0 it also hid the
@@ -573,12 +828,36 @@ fn traceWhitted(primary: Ray) -> vec3f {
 }
 
 // ---- Renderer 2: path tracer (C1) ----------------------------------------
-// Follows one random path of light backwards from the camera. At each matte
-// surface it adds the light arriving there directly from the sun and the
-// glowing objects (via shadow rays) and then bounces on in a random
-// direction, until the path escapes to the sky (which adds the sky's light)
-// or ends.
+// Follows one random path of light backwards from the camera. At each surface
+// it adds the light arriving there directly from the sun and the glowing
+// objects (via shadow rays) and then bounces on in a random direction, until
+// the path escapes to the sky (which adds the sky's light) or ends.
 const MAX_PATH_BOUNCES = 8u;
+
+// Once a path has scattered off something rough, this is the most light one
+// step of it can add. A rare path can reach something very bright, such as the
+// sun through glass. On average that's a little light, but a single sample of
+// it stays visible as a bright speck (a "firefly") for thousands of samples.
+// Capping it removes a little real light in exchange for a clean image, like
+// Clamp Indirect in Blender's Cycles renderer:
+// https://docs.blender.org/manual/en/latest/render/cycles/render_settings/light_paths.html#clamping
+const MAX_SCATTERED_LIGHT = 10.0;
+
+fn limitScattered(value: vec3f, scattered: bool) -> vec3f {
+  let brightest = max(value.r, max(value.g, value.b));
+  if (!scattered || brightest <= MAX_SCATTERED_LIGHT) {
+    return value;
+  }
+  return value * (MAX_SCATTERED_LIGHT / brightest);
+}
+
+// The share of the credit for a light found by a bounce ray. See misWeight.
+fn bounceShare(bouncePdf: f32, shadowRayPdf: f32) -> f32 {
+  if (bouncePdf <= 0.0) {
+    return 1.0;
+  }
+  return misWeight(bouncePdf, shadowRayPdf);
+}
 
 fn tracePath(primary: Ray) -> vec3f {
   let toSun = sunDirection();
@@ -586,10 +865,10 @@ fn tracePath(primary: Ray) -> vec3f {
   var throughput = vec3f(1.0);
   var light = vec3f(0.0); // gathered so far
   var firstHitDistance = NO_HIT;
-  // Whether this ray should count light sources it hits directly: true for
-  // camera rays and mirror reflections, false after a matte bounce, whose
-  // shadow rays already counted them (the same rule as the sun disk in sky()).
-  var countLights = true;
+  // The last bounce's chance density, or 0 if shadow rays can't have found
+  // what this ray finds: camera rays, perfect mirrors and glass.
+  var bouncePdf = 0.0;
+  var scattered = false; // whether the path has left anything rough or matte
 
   for (var bounce = 0u; bounce < MAX_PATH_BOUNCES; bounce++) {
     let hit = intersectScene(ray);
@@ -599,69 +878,50 @@ fn tracePath(primary: Ray) -> vec3f {
     if (hit.t >= NO_HIT) {
       // The path escaped: the sky is a light source, so whatever it shows in
       // this direction is light arriving along the path.
-      light += throughput * sky(ray.dir, toSun, countLights);
+      let disk = sunDisk(ray.dir, toSun) * bounceShare(bouncePdf, SUN_PDF);
+      light += limitScattered(throughput * (sky(ray.dir, toSun, false) + disk), scattered);
       break;
     }
 
     let material = materials[hit.material];
-    if (countLights) {
-      light += throughput * material.emission;
-    }
-    let reflected = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
-    let albedo = surfaceColor(material, hit.position);
-    let cosView = saturate(-dot(ray.dir, hit.normal));
+    // If it glows, a shadow ray might have found this point too. That chance,
+    // as in lightFromObjects, comes from the distance and the angle.
+    let cosLight = max(abs(dot(ray.dir, hit.normal)), 1e-5);
+    let share = bounceShare(bouncePdf, hit.lightDensity * hit.t * hit.t / cosLight);
+    light += limitScattered(throughput * material.emission * share, scattered);
 
-    // A metal reflects all the light that reaches it, tinted by its color, and
-    // has no matte part. `metallic` blends metal and non-metal; choosing one
-    // at random with exactly those odds is right on average.
-    if (material.metallic > 0.0 && random() < material.metallic) {
-      throughput *= fresnel(albedo, cosView);
-      ray = reflected;
-      countLights = true;
-      continue;
-    }
-
-    // A non-metal is a matte surface under a clear layer that reflects a
-    // share `coat` of the light. The matte part gets (1 - coat) of everything.
-    let coat = polishedShare(material, cosView);
+    let surface = surfaceAt(material, hit, ray);
 
     // First, light arriving directly, through shadow rays: one toward a
     // random point on the sun ("next-event estimation") and one toward a
     // random point on a glowing object. Only sending bounce rays would find
     // the tiny sun or a small lamp by chance, almost never.
-    let sunRay = sampleSunDirection(toSun);
-    let cosine = dot(hit.normal, sunRay);
-    var direct = lightFromObjects(hit.position, hit.normal);
-    if (cosine > 0.0 && !inShadow(hit.position, hit.normal, sunRay)) {
-      direct += scene.sunColor * cosine;
-    }
-    light += throughput * (1.0 - coat) * albedo * direct;
-
-    // Then continue the path. With probability `coat` it reflects off the
-    // clear layer like a mirror; otherwise it bounces off the matte surface.
-    // Choosing one at random, with exactly those odds, is right on average.
-    if (random() < coat) {
-      ray = reflected;
-      countLights = true; // a reflection of a light isn't covered by shadow rays
-      continue;
+    if (surface.usesShadowRays) {
+      var direct = lightFromObjects(surface, hit.position);
+      let sunRay = sampleSunDirection(toSun);
+      let sun = scatterToward(surface, sunRay);
+      if (sun.pdf > 0.0 && !inShadow(hit.position, surface.normal, sunRay)) {
+        direct += sun.value * scene.sunColor * PI * misWeight(SUN_PDF, sun.pdf);
+      }
+      light += limitScattered(throughput * direct, scattered);
     }
 
-    // A matte surface scatters light more toward its normal than sideways
-    // (Lambert's cosine law again), so directions near the normal are chosen
-    // more often: a random point on a unit sphere resting on the surface gives
-    // exactly that spread ("cosine-weighted"). With the directions spread that
-    // way, each bounce just multiplies by the albedo.
-    let scatter = hit.normal + randomUnitVector();
-    let dir = select(normalize(scatter), hit.normal, dot(scatter, scatter) < 1e-8);
-    throughput *= albedo;
-    ray = Ray(hit.position + hit.normal * EPSILON, dir);
-    countLights = false;
+    // Then continue the path.
+    let next = sampleBounce(surface, hit.position);
+    if (all(next.weight == vec3f(0.0))) {
+      break;
+    }
+    throughput *= next.weight;
+    ray = next.ray;
+    bouncePdf = next.pdf;
+    scattered = scattered || next.pdf > 0.0 || !surface.polished;
 
     // Russian roulette: after a few bounces, end paths at random, more often
     // the less light they can still carry, and brighten the survivors to make
     // up for it. On average the result is unchanged, but little time goes on
-    // paths that hardly matter.
-    if (bounce >= 2u) {
+    // paths that hardly matter. Mirrors and glass lose almost no light, so
+    // paths through them just run out of bounces.
+    if (bounce >= 2u && bouncePdf > 0.0) {
       let keep = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
       if (random() >= keep) {
         break;

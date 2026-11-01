@@ -24,7 +24,7 @@ const scene: Scene = {
   camera: { target: [0, 0, 0], yaw: 0, pitch: 0.3, distance: 5 },
   materials: {
     floor: { baseColor: { a: [1, 2, 3], b: [4, 5, 6], cellSize: 2 } },
-    shiny: { baseColor: [7, 8, 9], roughness: 0.25, metallic: 0.5, ior: 2 },
+    shiny: { baseColor: [7, 8, 9], roughness: 0.25, metallic: 0.5, ior: 2, transmission: 0.75 },
     lamp: { baseColor: [0, 0, 0], emission: { color: [1, 0.5, 0.25], strength: 4 } },
   },
   ground: 'floor',
@@ -63,13 +63,21 @@ test('scene info, spheres and materials land where tracer.wgsl expects', () => {
   // floor: a checker, with the defaults filled in.
   assert.deepEqual([...materialFloats.subarray(0, 4)], [1, 2, 3, 1]); // color a; roughness
   assert.deepEqual([...materialFloats.subarray(4, 8)], [4, 5, 6, 2]); // color b; cellSize
-  assert.deepEqual([...materialFloats.subarray(8, 13)], [0, 0, 0, 0, 1.5]); // no glow; metallic; ior
+  assert.deepEqual([...materialFloats.subarray(8, 14)], [0, 0, 0, 0, 1.5, 0]); // no glow; metallic; ior; transmission
   // shiny: a plain color (cellSize 0), with every value set.
   assert.deepEqual([...materialFloats.subarray(16, 20)], [7, 8, 9, 0.25]);
   assert.equal(materialFloats[23], 0);
-  assert.deepEqual([...materialFloats.subarray(27, 29)], [0.5, 2]);
+  assert.deepEqual([...materialFloats.subarray(27, 30)], [0.5, 2, 0.75]);
   // lamp: color × strength.
   assert.deepEqual([...materialFloats.subarray(40, 43)], [4, 2, 1]);
+});
+
+test('glowing objects store the chance of a shadow ray aiming at each square meter', () => {
+  const packed = packScene(scene);
+  // The one light, a 2 × 4 × 6 box: always picked, with 88 m² of surface.
+  assert.ok(Math.abs((new Float32Array(packed.boxes)[7] ?? 0) - 1 / 88) < 1e-7);
+  assert.equal(new Float32Array(packed.spheres)[5], 0); // these spheres don't glow
+  assert.equal(findLights(scene)[0]?.density, 1 / 88);
 });
 
 test('boxes store their center, half size and rotation columns', () => {
@@ -129,6 +137,7 @@ test('mistakes in a layout are errors, not wrong pictures', () => {
   const plain: Vec3 = [1, 1, 1];
   assert.throws(() => packScene(withMaterial({ baseColor: plain, roughness: 1.5 })), /"odd".*roughness/);
   assert.throws(() => packScene(withMaterial({ baseColor: plain, metallic: -1 })), /"odd".*metallic/);
+  assert.throws(() => packScene(withMaterial({ baseColor: plain, transmission: 2 })), /"odd".*transmission/);
   assert.throws(() => packScene(withMaterial({ baseColor: plain, ior: 0.5 })), /"odd".*ior/);
   // cellSize 0 means "plain color" to the shader, so a checker can't use it.
   assert.throws(() => packScene(withMaterial({ baseColor: { a: plain, b: plain, cellSize: 0 } })), /"odd".*cellSize/);
@@ -160,5 +169,5 @@ test('light kinds and NO_GROUND match the constants in tracer.wgsl', () => {
 test("the shader's Material fields are in the order packScene writes them", () => {
   const body = /^struct Material \{([^}]*)\}/m.exec(wgsl)?.[1] ?? '';
   const fields = [...body.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
-  assert.deepEqual(fields, ['colorA', 'roughness', 'colorB', 'cellSize', 'emission', 'metallic', 'ior']);
+  assert.deepEqual(fields, ['colorA', 'roughness', 'colorB', 'cellSize', 'emission', 'metallic', 'ior', 'transmission']);
 });

@@ -34,15 +34,15 @@ export const neonNight: Scene = {
   // brighter than the sky above it.
   environment: { sun: [0.26, 0.305, 0.445], sky: 0.06 },
   materials: {
-    // Plain matte for now. A sharp reflection looked wrong here: real wet
-    // asphalt blurs reflections, which needs rough surfaces (GGX).
-    asphalt: { baseColor: [0.32, 0.32, 0.33] },
+    // Wet asphalt: dark and slick. Its bumps blur reflections into a long
+    // smear, and Fresnel makes them strong only at low angles.
+    asphalt: { baseColor: [0.14, 0.14, 0.145], roughness: 0.3 },
     // Almost no green: very bright light washes out toward white on screen
     // (as neon does in photos), and any green would make it pale.
     neon: { baseColor: [0.05, 0.05, 0.05], emission: { color: [1, 0.01, 0.5], strength: 16 } },
-    // A tinted mirror for now. It's metal only because that keeps the look;
-    // real water is a non-metal, and the puddles become that with wet asphalt.
-    puddle: { baseColor: [0.6, 0.62, 0.68], metallic: 1, roughness: 0 },
+    // Still water over the same asphalt, so it's darker than the wet road
+    // around it and much sharper.
+    puddle: { baseColor: [0.04, 0.04, 0.045], roughness: 0, ior: 1.33 },
     chrome: { baseColor: [0.9, 0.9, 0.92], metallic: 1, roughness: 0 },
   },
   ground: 'asphalt',

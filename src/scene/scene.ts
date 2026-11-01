@@ -26,14 +26,17 @@ export interface Checker {
 // Any material can also glow (`emission`), which makes it a light source.
 export interface Material {
   baseColor: Vec3 | Checker; // a non-metal's color, or the tint of a metal's reflections
-  // 0 is polished, 1 (the default) is fully rough. Blurred reflections aren't
-  // built yet, so for now a metal is always a perfect mirror, and a non-metal
-  // only reflects at exactly 0.
-  roughness?: number;
+  roughness?: number; // 0 is polished, 1 (the default) blurs reflections completely
   // 0 (the default) is a non-metal, 1 a metal. glTF's own default is 1, but
   // most surfaces in a hand-written scene aren't metal.
   metallic?: number;
-  ior?: number; // index of refraction, default 1.5: higher makes a non-metal reflect more
+  // 0 (the default) to 1: the share of a non-metal's light that passes through
+  // it instead of scattering. In glTF this alone means a thin wall, which needs
+  // KHR_materials_volume to bend light. Spheres and boxes are solid, so here
+  // it's always solid glass, which bends light as it goes in and out.
+  // https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_volume
+  transmission?: number;
+  ior?: number; // index of refraction, default 1.5: higher reflects more and bends light more
   emission?: Emission;
 }
 
@@ -103,11 +106,12 @@ export const NO_GROUND = 0xffffffff;
 //
 //   SceneInfo  slot 0 sphereCount  1 boxCount  2 lightCount  3 groundMaterial (all u32)
 //              4..6 sunColor  7 skyStrength
-//   Sphere     slot 0..2 center  3 radius  4 material (u32)  5..7 (padding)
-//   Box        slot 0..2 center  3 material (u32)  4..6 halfSize  7 (padding)
+//   Sphere     slot 0..2 center  3 radius  4 material (u32)  5 lightDensity  6..7 (padding)
+//   Box        slot 0..2 center  3 material (u32)  4..6 halfSize  7 lightDensity
 //              8..10, 12..14, 16..18 rotation columns  11, 15, 19 (padding)
 //   Material   slot 0..2 colorA  3 roughness  4..6 colorB  7 cellSize (0: plain color)
-//              8..10 emission (color × strength)  11 metallic  12 ior  13..15 (padding)
+//              8..10 emission (color × strength)  11 metallic  12 ior  13 transmission
+//              14..15 (padding)
 //   Light      slot 0 kind (u32)  1 index (u32)  2 cdf  3 probability
 export const SCENE_INFO_BYTES = 32;
 export const SPHERE_BYTES = 32;
@@ -156,10 +160,11 @@ export function packScene(scene: Scene): PackedScene {
   const materials = new ArrayBuffer(MATERIAL_BYTES * Math.max(materialEntries.length, 1));
   const materialFloats = new Float32Array(materials);
   materialEntries.forEach(([name, material], i) => {
-    const { baseColor, roughness = 1, metallic = 0, ior = 1.5 } = material;
+    const { baseColor, roughness = 1, metallic = 0, transmission = 0, ior = 1.5 } = material;
     const problem = (detail: string): Error => new Error(`Scene "${scene.name}", material "${name}": ${detail}`);
     if (!(roughness >= 0 && roughness <= 1)) throw problem(`roughness is ${roughness}; it must be from 0 to 1`);
     if (!(metallic >= 0 && metallic <= 1)) throw problem(`metallic is ${metallic}; it must be from 0 to 1`);
+    if (!(transmission >= 0 && transmission <= 1)) throw problem(`transmission is ${transmission}; it must be from 0 to 1`);
     if (!(ior >= 1)) throw problem(`ior is ${ior}; it can't be below 1, the value for empty space`);
 
     const base = (i * MATERIAL_BYTES) / 4; // in 4-byte slots
@@ -175,6 +180,7 @@ export function packScene(scene: Scene): PackedScene {
     materialFloats.set(radiance(material), base + 8);
     materialFloats[base + 11] = metallic;
     materialFloats[base + 12] = ior;
+    materialFloats[base + 13] = transmission;
   });
 
   // A storage buffer binding can't be smaller than one array element, so an
@@ -188,6 +194,7 @@ export function packScene(scene: Scene): PackedScene {
     sphereFloats.set(sphere.center, base);
     sphereFloats[base + 3] = sphere.radius;
     sphereInts[base + 4] = materialIndex(sphere.material);
+    sphereFloats[base + 5] = lights.find((l) => l.kind === 'sphere' && l.index === i)?.density ?? 0;
   });
 
   const boxBuffer = new ArrayBuffer(BOX_BYTES * Math.max(boxes.length, 1));
@@ -201,6 +208,7 @@ export function packScene(scene: Scene): PackedScene {
       box.size.map((s) => s / 2),
       base + 4,
     );
+    boxFloats[base + 7] = lights.find((l) => l.kind === 'box' && l.index === i)?.density ?? 0;
     const [x, y, z] = box.rotation ? rotationFromDegrees(box.rotation) : IDENTITY;
     boxFloats.set(x, base + 8);
     boxFloats.set(y, base + 12);
@@ -233,6 +241,10 @@ export interface LightEntry {
   kind: keyof typeof LIGHT_KIND;
   index: number; // into spheres or boxes
   probability: number; // of being picked for a shadow ray
+  // The chance per square meter of a shadow ray aiming at any one point on it.
+  // When a bounce ray finds this light by itself, multiple importance sampling
+  // needs to know how likely a shadow ray was to find the same point.
+  density: number;
 }
 
 // Every glowing object, with how often the path tracer should aim shadow
@@ -245,16 +257,21 @@ export function findLights(scene: Scene, boxes: readonly Box[] = scene.boxes ?? 
     const [r, g, b] = material ? radiance(material) : [0, 0, 0];
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
   };
-  const found: { kind: LightEntry['kind']; index: number; power: number }[] = [];
+  const found: { kind: LightEntry['kind']; index: number; power: number; area: number }[] = [];
   scene.spheres.forEach((sphere, index) => {
-    const power = brightness(sphere.material) * 4 * Math.PI * sphere.radius ** 2;
-    if (power > 0) found.push({ kind: 'sphere', index, power });
+    const area = 4 * Math.PI * sphere.radius ** 2;
+    const power = brightness(sphere.material) * area;
+    if (power > 0) found.push({ kind: 'sphere', index, power, area });
   });
   boxes.forEach((box, index) => {
     const [w, h, d] = box.size;
-    const power = brightness(box.material) * 2 * (w * h + h * d + w * d);
-    if (power > 0) found.push({ kind: 'box', index, power });
+    const area = 2 * (w * h + h * d + w * d);
+    const power = brightness(box.material) * area;
+    if (power > 0) found.push({ kind: 'box', index, power, area });
   });
   const total = found.reduce((sum, light) => sum + light.power, 0);
-  return found.map(({ kind, index, power }) => ({ kind, index, probability: power / total }));
+  return found.map(({ kind, index, power, area }) => {
+    const probability = power / total;
+    return { kind, index, probability, density: probability / area };
+  });
 }

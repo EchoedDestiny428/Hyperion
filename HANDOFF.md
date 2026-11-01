@@ -10,16 +10,16 @@ For whoever picks this up next, human or agent. Updated 2026-11-01 at the end of
   - chunk 2: path tracer (bounce light, sky light, soft sun shadows, Russian roulette), the Renderer menu (Whitted kept for comparison), GPU timing;
   - chunk 3: rotated boxes, glowing materials with light sampling, per-scene sun and sky, the `neon-night` scene. The Cornell box is deferred.
   - optimization pass paused: the benchmark, the first speedup and the desktop GPU test are in; see below.
-  - chunk 4 in progress, stage 1 of 4 done: one material set by numbers instead of kinds, Fresnel on polished surfaces and metals, the `material-test` scene.
+  - chunk 4 in progress, step 10 done: one material set by numbers instead of kinds, Fresnel, GGX rough surfaces, multiple importance sampling (MIS), glass (clear and frosted), wet asphalt on `neon-night`, the `material-test` scene.
   - also: fly camera (WASD), arrow-key orbit, full 360° turning, scene sliders, the `shadow-heights` and `aliasing-test` scenes.
-- **Checks:** `npm run typecheck`, `npm test` (64 passing) and `npm run build` all pass.
-- **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 23. Keep adding a section per change, in the same plain style.
+- **Checks:** `npm run typecheck`, `npm test` (65 passing) and `npm run build` all pass.
+- **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 27. Keep adding a section per change, in the same plain style.
 
 ## Next: chunk 4, real materials
 
 Photo quality comes before more optimization (decided 2026-11-01). Chunk 4's materials and the dreamspace room will change what's slow, so the rest of the optimization pass waits for them. That part of `docs/PLAN.md` holds the order for afterward.
 
-Step 10 in `docs/PLAN.md` is being built in four stages, each reviewed before the next. Stage 2 is next, once it's approved: GGX rough metal, with multiple importance sampling (MIS) so rough surfaces can use both shadow rays and bounce rays. Check the sources for sampling GGX and for MIS before coding; they weren't checked when this was planned.
+Step 10 in `docs/PLAN.md` is done. The rest of chunk 4 is steps 11 and 12, the first-person camera and the dreamspace room, which need approval first. The room will show the known gap with glass: shadow rays stop at it, so a pool's floor gets little sunlight.
 
 ## Testing on another machine
 
@@ -87,11 +87,13 @@ What the desktop runs showed:
 
 Stage 1 of the new materials made the path tracer slightly slower on the desktop GPU, with every round agreeing: `ball-test-1` 0.23 to 0.25 ms (+8.7%), `aliasing-test` 0.34 to 0.37 ms (+8.8%), `shadow-heights` 0.21 to 0.22 ms (+4.8%, a single rounding step) and `neon-night` 1.11 to 1.17 ms (+5.4%). The cause hasn't been looked into, and it hasn't been measured on the laptop. The material struct grew from 48 to 64 bytes, and each hit does a little more work.
 
+The rest of step 10 (GGX, MIS, glass) on the same GPU, compared with stage 1 and every round agreeing: `ball-test-1` 0.25 to 0.34 ms (+36%), `aliasing-test` 0.37 to 0.44 ms (+16%), `shadow-heights` 0.22 to 0.29 ms (+32%). `neon-night` went from 1.17 to 1.21 ms (+3.4%), but its materials changed too, so it isn't like for like. The enlarged `material-test` takes 1.02 ms. Not measured on the laptop.
+
 Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
 
 ## Where things live
 
-- `src/render/tracer.wgsl`: both renderers (`traceWhitted`, `tracePath`), debug views, light sampling, accumulation, tone mapping.
+- `src/render/tracer.wgsl`: both renderers (`traceWhitted`, `tracePath`), materials (`surfaceAt`, `scatterToward`, `sampleBounce`, `sampleGlass`), debug views, light sampling, accumulation, tone mapping.
 - `src/render/tracer-pass.ts`: pipeline, buffers, bind group (binding numbers match the shader).
 - `src/scene/scene.ts`: the scene format and `packScene` byte layouts; `src/scene/layouts/` holds the scenes, `registry.ts` lists them.
 - `src/render/accumulation.ts`: when to restart, pacing, sample limits.
@@ -104,7 +106,7 @@ Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no g
 - **Layouts are locked by tests.** WGSL structs and their TypeScript packers must match byte for byte. The tests also read `tracer.wgsl` with regexes to check the `LIGHT_*`, `VIEW_*`, `RENDERER_*` and `NO_GROUND` constants, so keep those as single lines of the form `const NAME = 3u;`, and the order of `Material`'s fields.
 - **Anything that changes the image must change `FrameParams` or the scene object,** or accumulation won't restart. Sliders replace the scene with a changed copy (`withSphereHeight`) for this reason.
 - **WGSL may assume no infinities or NaNs,** so don't rely on `1.0 / 0.0`. The box slab test nudges zero direction components instead.
-- **Testing on a real GPU without a visible window:** `scripts/benchmark.ts` shows how. Run Edge (or Chrome) headless with `--remote-debugging-port` and an *absolute* `--user-data-dir`; a relative one makes Edge show an error dialog on the desktop. `--dump-dom` returns before async WebGPU work finishes, so drive the page over the DevTools protocol instead: `Runtime.evaluate` with `awaitPromise`, `Emulation.setDeviceMetricsOverride` for the size, `Page.captureScreenshot`, `Browser.close` when done. The HUD text gives sample counts and GPU times. One screenshot early in a session once came back tiled, and retaking it was fine, so retake a surprising result before trusting it.
+- **Testing on a real GPU without a visible window:** `scripts/benchmark.ts` shows how. Run Edge (or Chrome) headless with `--remote-debugging-port` and an *absolute* `--user-data-dir`; a relative one makes Edge show an error dialog on the desktop. `--dump-dom` returns before async WebGPU work finishes, so drive the page over the DevTools protocol instead: `Runtime.evaluate` with `awaitPromise`, `Emulation.setDeviceMetricsOverride` for the size, `Page.captureScreenshot`, `Browser.close` when done. The HUD text gives sample counts and GPU times. Screenshots early in a session have twice come back tiled, cause unknown. Retaking them was fine, so render one throwaway image first, and retake a surprising result before trusting it.
 - **Same image, same bytes.** Random numbers come from the pixel and sample number, so at a fixed sample count identical code gives a byte-identical picture, as long as each pixel asks for the same random numbers in the same order. That makes before and after screenshots a strong check on any change that shouldn't alter the image.
 
 ## Conventions
@@ -115,5 +117,5 @@ Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no g
 - **Pure logic stays apart from browser glue,** so it can be tested in Node. Tests sit next to their code as `*.test.ts`, using `node:test` and `node:assert/strict`.
 - **Comments are plain language and explain why.** Cite spec or MDN URLs for API behavior, and date browser-support claims ("checked on YYYY-MM-DD").
 - **User-facing errors say what's wrong and how to fix it.** Build DOM with `textContent`, never `innerHTML`.
-- **The project is also a way to learn graphics programming,** so explain the reasoning behind graphics decisions, and keep `docs/learn/C<n>.md` up to date, ending with a "Words to know" list.
+- **The project is also a way to learn graphics programming,** so explain the reasoning behind graphics decisions, and keep `docs/learn/C<n>.md` up to date, ending with a "Words to know" list. Reports on finished work end with a few questions someone might ask about the code, each with its answer.
 - **Commit only when asked,** one commit per chunk, titled `C<n>: summary` with a bullet list of what changed.
