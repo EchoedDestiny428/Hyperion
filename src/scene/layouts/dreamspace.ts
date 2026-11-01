@@ -1,6 +1,5 @@
 import { orbitFromFly } from '../../camera/fly.ts';
-import type { Vec3 } from '../../math/vec3.ts';
-import type { Box, Scene } from '../scene.ts';
+import { type Box, type Scene, boxBetween as between } from '../scene.ts';
 
 // A tiled hall with a long pool down the middle, lit by glowing ceiling panels
 // and by daylight through a wall of tall windows. It's the first step toward
@@ -21,14 +20,6 @@ const SILL = 0.6;
 const WINDOW_TOP = 3.6;
 const BAY = 3; // one window and one pillar
 const PILLAR = 0.6;
-
-// A box given by two opposite corners, which reads more like a floor plan than
-// a center and a size.
-const between = (min: Vec3, max: Vec3, material: string): Box => ({
-  center: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2],
-  size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
-  material,
-});
 
 // The deck is four boxes around the hole for the pool.
 const floor: Box[] = [

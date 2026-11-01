@@ -63,6 +63,16 @@ export interface Box {
   material: string;
 }
 
+// A box given by two opposite corners, which reads more like a floor plan than
+// a center and a size.
+export function boxBetween(min: Vec3, max: Vec3, material: string): Box {
+  return {
+    center: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2],
+    size: [max[0] - min[0], max[1] - min[1], max[2] - min[2]],
+    material,
+  };
+}
+
 // The light that comes from outside the scene.
 export interface Environment {
   sun: Vec3; // the sun's color times its brightness

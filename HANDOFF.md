@@ -8,20 +8,19 @@ For whoever picks this up next, human or agent. Updated 2026-11-01 at the end of
 - **C1 chunks 1–3 are done** (see `docs/PLAN.md`):
   - chunk 1: GPU random numbers, progressive accumulation, anti-aliasing;
   - chunk 2: path tracer (bounce light, sky light, soft sun shadows, Russian roulette), the Renderer menu (Whitted kept for comparison), GPU timing;
-  - chunk 3: rotated boxes, glowing materials with light sampling, per-scene sun and sky, the `neon-night` scene. The Cornell box is deferred.
+  - chunk 3: rotated boxes, glowing materials with light sampling, per-scene sun and sky, the `neon-night` scene, and the Cornell box, built after chunk 4.
   - optimization pass paused: the benchmark, the first speedup and the desktop GPU test are in; see below.
   - chunk 4 done: one material set by numbers instead of kinds, Fresnel, GGX rough surfaces, multiple importance sampling (MIS), glass (clear and frosted), wet asphalt on `neon-night`, the `material-test` scene, procedural tiles and the `dreamspace` room.
   - also: fly camera (WASD), arrow-key orbit, full 360° turning, scene sliders, the `shadow-heights` and `aliasing-test` scenes.
-- **Checks:** `npm run typecheck`, `npm test` (66 passing) and `npm run build` all pass.
-- **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 31. Keep adding a section per change, in the same plain style.
+- **Checks:** `npm run typecheck`, `npm test` (70 passing) and `npm run build` all pass.
+- **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 33. Keep adding a section per change, in the same plain style.
 
 ## Next: finish C1
 
 Photo quality came before more optimization (decided 2026-11-01), and the room now exists, so what's slow can be measured. In order, each needing approval first:
 
-1. The Cornell box (step 9), which C1's done list requires. Its measurements need a source; see `docs/PLAN.md`.
-2. Finish the learning note (step 15).
-3. The rest of the optimization pass: skip box faces pointing away, with a way to measure noise, then a BVH. `dreamspace` is the scene to measure on.
+1. Finish the learning note (step 15). Everything else on C1's done list is met.
+2. The rest of the optimization pass: skip box faces pointing away, with a way to measure noise, then a BVH. `dreamspace` is the scene to measure on.
 
 Then C2. The fly camera's pointer lock, walking and collisions wait for C2 too.
 
@@ -97,6 +96,10 @@ The `dreamspace` room is by far the slowest scene. On the same desktop GPU in on
 
 The room's shader changes (patterns, tiles, haze) cost nothing measurable elsewhere: compared on the same GPU with the same code before them, path tracer, every scene showed 0.0% (not clear), and all 20 before and after screenshots of the other scenes were byte-identical.
 
+`cornell-box` on the same GPU: Whitted 0.28 / 0.44 ms, path 1.74 / 2.30 ms. The shadow-ray fix showed no clear cost: `neon-night` 0.0% (not clear), `dreamspace` +1.4%, below the 5% that counts.
+
+Against a reference (Bitterli's Cornell box, Tungsten's HDR render, 12 patches, ours ÷ theirs): as shipped, mean ratios are 0.98 red, 1.01 green and 1.06 blue. The extra blue and green come from the 4% shiny coat on non-metals, which the reference doesn't have. With that coat removed in a scratch build, plus 64 bounces and no firefly cap, every patch is within 1.6%, and the mean is 1.004. The 8-bounce limit and the cap together cost at most about 0.5%. Before the shadow-ray fix, the same scratch build's mean was 0.93, and the ceiling's was 0.75.
+
 Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
 
 ## Where things live
@@ -116,6 +119,7 @@ Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no g
 - **WGSL may assume no infinities or NaNs,** so don't rely on `1.0 / 0.0`. The box slab test nudges zero direction components instead.
 - **Testing on a real GPU without a visible window:** `scripts/benchmark.ts` shows how. Run Edge (or Chrome) headless with `--remote-debugging-port` and an *absolute* `--user-data-dir`; a relative one makes Edge show an error dialog on the desktop. `--dump-dom` returns before async WebGPU work finishes, so drive the page over the DevTools protocol instead: `Runtime.evaluate` with `awaitPromise`, `Emulation.setDeviceMetricsOverride` for the size, `Page.captureScreenshot`, `Browser.close` when done. The HUD text gives sample counts and GPU times. Screenshots early in a session have twice come back tiled, cause unknown. Retaking them was fine, so render one throwaway image first, and retake a surprising result before trusting it.
 - **Same image, same bytes.** Random numbers come from the pixel and sample number, so at a fixed sample count identical code gives a byte-identical picture, as long as each pixel asks for the same random numbers in the same order. That makes before and after screenshots a strong check on any change that shouldn't alter the image.
+- **Bounce rays are the check on shadow rays.** Both find the same light, so a build with no shadow rays must give the same picture as a build with only them, from any viewpoint. A difference means a bug. Look from inside the scene too, since the bug in section 33 of the learning note was invisible from the usual cameras. `lightFromObjects` must keep aiming from the ray's real start, and shouldn't go back to `blocked`.
 - **The room's sun depends on `sunDirection()`.** `dreamspace` is laid out so the sun lands on the deck, not the water, which blocks shadow rays. Changing the sun's direction, or ticking "Sun moves", changes that.
 - **Only the listed sample counts work when driving the page.** The Samples menu offers 1, 4, 16, 64, 256 and 1,024. Setting any other value from a script leaves a very noisy image, which looks like a rendering bug.
 

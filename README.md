@@ -41,10 +41,12 @@ To preview the "can't run here" messages, add `?simulate=no-webgpu`, `?simulate=
 
 Pick a scene layout from the menu in the bottom-left corner, or open one directly with `?scene=ball-test-1`. Layouts are plain data in [`src/scene/layouts/`](src/scene/layouts/). To add one, create a file there and list it in `src/scene/registry.ts`.
 
-Some scenes have sliders under the Scene menu; `shadow-heights` lifts a ball to show how shadows soften with height. `neon-night` is lit by a glowing neon sign, with wet asphalt, puddles and a field of mirror balls. `material-test` compares metal, plastic and glass at every roughness. `dreamspace` is a tiled hall with a pool, lit by ceiling panels and sunlight through tall windows; it starts in the Fly camera, and takes the longest to refine.
+Some scenes have sliders under the Scene menu; `shadow-heights` lifts a ball to show how shadows soften with height. `neon-night` is lit by a glowing neon sign, with wet asphalt, puddles and a field of mirror balls. `material-test` compares metal, plastic and glass at every roughness. `cornell-box` is the classic test for bounce light; switch the Renderer to Whitted to see the same room without it. `dreamspace` is a tiled hall with a pool, lit by ceiling panels and sunlight through tall windows; it starts in the Fly camera, and takes the longest to refine.
 
 The **Renderer** panel in the top-right corner switches between the C0 Whitted ray tracer and the C1 path tracer, picks the camera, and shows debug views such as normals, shadows and rays per pixel. Its anti-aliasing controls set how many samples each pixel averages, and can add them one at a time; the `aliasing-test` scene shows the difference best. The HUD in the top-left shows how long the GPU spends per frame, where the browser can measure it.
 
 ## License
 
 The code is under the [MIT License](LICENSE). Third-party assets added in later milestones keep their own licenses, which will be listed with attribution.
+
+The `cornell-box` scene uses the measurements of the Cornell box published by the Cornell University Program of Computer Graphics, and the RGB colors from [Benedikt Bitterli's public-domain (CC0) Cornell box](https://benedikt-bitterli.me/resources/).

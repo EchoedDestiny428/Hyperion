@@ -455,7 +455,11 @@ fn lightFromObjects(surface: Surface, position: vec3f) -> vec3f {
     return vec3f(0.0);
   }
   let s = sampleLight();
-  let toLight = s.position - position;
+  // Measured from where the ray really starts. Measured from the surface, the
+  // offset shortens the true trip to a light it faces, so closer than about a
+  // meter, a ray reached the light before it stopped and was "blocked" by it.
+  let start = position + surface.normal * EPSILON;
+  let toLight = s.position - start;
   let distanceSquared = dot(toLight, toLight);
   let distance = sqrt(distanceSquared);
   let dir = toLight / distance;
@@ -465,7 +469,7 @@ fn lightFromObjects(surface: Surface, position: vec3f) -> vec3f {
     return vec3f(0.0); // the patch faces away from the point, or the point from the patch
   }
   // Stop just short of the light, so its own surface doesn't count as a blocker.
-  if (blocked(position, surface.normal, dir, distance * (1.0 - 1e-3))) {
+  if (intersectScene(Ray(start, dir)).t < distance - EPSILON) {
     return vec3f(0.0);
   }
   // Dividing by the chance of this direction makes the estimate right on average.

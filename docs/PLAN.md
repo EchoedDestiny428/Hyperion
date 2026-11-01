@@ -59,7 +59,7 @@
    - Also in chunk 2: the **Renderer menu** keeps the Whitted tracer selectable (decided; it was step 13), replacing the layer switches, and **GPU timing** moved here from chunk 5 (step 12).
    - Known gaps: no caustics, and the painted sky is brighter than a real one next to the sun, so shadows look a little washed out.
 
-*Chunk 3: boxes, glowing objects and a night scene (done, except the Cornell box)*
+*Chunk 3: boxes, glowing objects and a night scene (done)*
 
 6. **Boxes,** with a center, a size and a rotation (any angles about x, y and z). Each ray is turned into the box's own coordinates, where the box is axis-aligned, and tested with the "slab" method. The ground plane becomes optional, since a room has its own floor.
 7. **Glowing objects:** any sphere or box can give off light, set by an `emission` color and strength in its material.
@@ -70,8 +70,12 @@
 8. **The `neon-night` scene** (instead of the Cornell box, for now): a bright bluish moon (a fifth of daylight), a hot-pink neon sign floating in the sky as the main light, three puddles, a field of 36 small mirror balls, and plain grey asphalt.
    - Check: pink light pooling under the sign, soft shadows behind the balls, the sign reflected in a puddle.
    - It costs about 16.5 ms of GPU time per sample at 1280×800 on an Intel Iris Xe laptop: every ray is tested against all 40 objects. This is the first scene where a BVH (Act 2) would clearly pay off.
-9. **The Cornell box** (deferred): a small room with a red wall, a green wall and a light panel in the ceiling, the standard test for bounce light.
-   - It's built from the measurements Cornell published. Their original data page now redirects elsewhere (checked 2026-10-29), so the numbers need another source, such as a reproduction in a well-known open renderer's test scenes.
+9. **The Cornell box** (done, after chunk 4): a small room with a red wall, a green wall and a light panel in the ceiling, the standard test for bounce light.
+   - It's built from the measurements Cornell published. Their data page has moved and couldn't be reached (checked 2026-11-01), so the numbers come from the copy in Intel's Embree project, as kept in tinyobjloader. The colors are the RGB values in Benedikt Bitterli's public-domain (CC0) scene.
+   - Scaled up 10 times, so the shader's 1 mm offset stays small next to the room. The real box is slightly crooked; walls and blocks here are straight, and a test checks the blocks land within 3 mm of the measured corners.
+   - The panel is whiter than Bitterli's, because this renderer has no white balance.
+   - Checked against a reference: a scratch copy rebuilt Bitterli's exact scene and compared raw light with Tungsten's HDR image. That found a real bug in shadow rays to nearby lights (see `docs/learn/C1.md`, section 33), now fixed. With purely matte surfaces like the reference's, every patch is within 1.6% of it, mean ratio 1.004.
+   - Known gaps: the camera's field of view is 50°, not Cornell's 39°, so the perspective differs a little. Every non-metal has a 4% shiny coat, which the reference doesn't, so saturated walls come out slightly paler: up to 1.5× in a wall's darkest color channels. A fine grain remains at 1,024 samples, because half of the shadow rays aim at the top of the panel, which faces away.
    - Check: red and green light on the white walls, and soft shadows under the blocks.
 
 *Optimization pass (paused until the dreamspace room exists)*
