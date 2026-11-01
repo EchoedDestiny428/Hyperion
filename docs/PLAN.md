@@ -74,7 +74,7 @@
    - It's built from the measurements Cornell published. Their original data page now redirects elsewhere (checked 2026-10-29), so the numbers need another source, such as a reproduction in a well-known open renderer's test scenes.
    - Check: red and green light on the white walls, and soft shadows under the blocks.
 
-*Optimization pass (in progress, before chunk 4)*
+*Optimization pass (paused until the dreamspace room exists)*
 
 The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on battery. Every step is measured with `npm run benchmark -- --against <before build>`, and only a clear change bigger than about 5% counts.
 
@@ -82,15 +82,20 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 - Done: work out a hit's normal only for the final closest object. 14–23% less GPU time on every scene, with identical images.
 - Tried and dropped: "any hit" shadow rays that stop at the first blocker. No gain in these open scenes, where most shadow rays are never blocked. Retest once there's a BVH.
 - Tried and dropped: separate shaders per renderer and view. Even a shader holding only the path tracer showed no clear gain.
-- Next: a BVH over spheres and boxes, pulled forward from Act 2; lower resolution while the camera moves; light sampling that skips box faces pointing away.
+- Paused on 2026-11-01: photo quality comes first, because chunk 4's materials and the dreamspace room will change what's slow.
+- Next, once the room exists: light sampling that skips box faces pointing away, with a way to measure noise, since the benchmark only measures time; then a BVH over spheres and boxes, pulled forward from Act 2.
+- Lower resolution while the camera moves comes sooner if chunk 4 makes the laptop too slow to work on.
 
 *Chunk 4: real materials*
 
 10. **One parameterized material instead of kinds.** It follows glTF's material model, so imported models map straight onto it in Act 2.
    - Parameters: `baseColor`, `roughness`, `metallic`, `transmission`, `ior` and `emission` (from step 7), with defaults so scene files stay short.
    - The path tracer samples each one: matte, rough or smooth metal (GGX microfacet), and glass (refraction with Fresnel).
+   - Light found by shadow rays and by bounce rays both count, weighted by multiple importance sampling (MIS), because rough surfaces sit between the cases where each works well. This replaces the all-or-nothing `countLights` rule (decided 2026-11-01).
+   - Glass is solid and bends light, as glTF's `KHR_materials_volume` extension does. In glTF, `transmission` alone means a thin wall that doesn't bend light, so Act 2's importer must treat it that way.
    - "Checker" stops being a material kind and becomes a pattern on `baseColor`.
    - Wet asphalt for `neon-night`: reflections blurred by roughness, and strong only at low angles (Fresnel). A plain mirror coat looked wrong there.
+   - Built in four stages. Stage 1 is done: the new format (without `transmission` yet), Fresnel with perfect mirrors, the checker pattern on `baseColor`, and the `material-test` scene. Still to come: GGX rough metal with MIS; rough non-metals and wet asphalt; `transmission` and glass.
 11. **A first-person camera:** done early, as a floating "Fly" camera (WASD, Q/E, drag to look, all the way around) next to the orbit camera. Still open: pointer lock for mouse look, walking with gravity and collisions for the dreamspace, and letting each scene choose its starting camera.
 12. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled room or hallway with a pool, lit by glowing ceiling panels and daylight through an opening. It uses every material: glass or water, rough and smooth metal, matte, and glowing surfaces. Tiles are checker patterns until image textures arrive.
     - Check: standing still inside it, the room refines into an image that could pass for a photo.

@@ -22,9 +22,9 @@ export const shadowHeights: Scene = {
   materials: {
     // Low-contrast squares: shadows stay easy to see, and the squares
     // (1 m wide) give a sense of scale.
-    floor: { kind: 'checker', a: [0.75, 0.75, 0.75], b: [0.62, 0.62, 0.62], cellSize: 1 },
-    clay: { kind: 'diffuse', albedo: [0.8, 0.8, 0.8] },
-    orange: { kind: 'diffuse', albedo: [0.9, 0.35, 0.05] },
+    floor: { baseColor: { a: [0.75, 0.75, 0.75], b: [0.62, 0.62, 0.62], cellSize: 1 } },
+    clay: { baseColor: [0.8, 0.8, 0.8] },
+    orange: { baseColor: [0.9, 0.35, 0.05] },
   },
   ground: 'floor',
   // The orange ball stands in front of the row, nearer the camera.

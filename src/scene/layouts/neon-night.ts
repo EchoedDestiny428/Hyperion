@@ -34,15 +34,16 @@ export const neonNight: Scene = {
   // brighter than the sky above it.
   environment: { sun: [0.26, 0.305, 0.445], sky: 0.06 },
   materials: {
-    // Plain matte for now. A mirror coat looked wrong here: real wet asphalt
-    // blurs reflections and fades them when seen from above, which needs
-    // chunk 4's roughness and Fresnel.
-    asphalt: { kind: 'diffuse', albedo: [0.32, 0.32, 0.33] },
+    // Plain matte for now. A sharp reflection looked wrong here: real wet
+    // asphalt blurs reflections, which needs rough surfaces (GGX).
+    asphalt: { baseColor: [0.32, 0.32, 0.33] },
     // Almost no green: very bright light washes out toward white on screen
     // (as neon does in photos), and any green would make it pale.
-    neon: { kind: 'diffuse', albedo: [0.05, 0.05, 0.05], emission: { color: [1, 0.01, 0.5], strength: 16 } },
-    puddle: { kind: 'mirror', tint: [0.6, 0.62, 0.68] },
-    chrome: { kind: 'mirror', tint: [0.9, 0.9, 0.92] },
+    neon: { baseColor: [0.05, 0.05, 0.05], emission: { color: [1, 0.01, 0.5], strength: 16 } },
+    // A tinted mirror for now. It's metal only because that keeps the look;
+    // real water is a non-metal, and the puddles become that with wet asphalt.
+    puddle: { baseColor: [0.6, 0.62, 0.68], metallic: 1, roughness: 0 },
+    chrome: { baseColor: [0.9, 0.9, 0.92], metallic: 1, roughness: 0 },
   },
   ground: 'asphalt',
   spheres: balls,

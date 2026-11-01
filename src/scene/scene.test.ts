@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import type { Vec3 } from '../math/vec3.ts';
 import {
   BOX_BYTES,
   DAYLIGHT,
   LIGHT_BYTES,
   LIGHT_KIND,
   MATERIAL_BYTES,
-  MATERIAL_KIND,
+  type Material,
   NO_GROUND,
   SCENE_INFO_BYTES,
   SPHERE_BYTES,
@@ -22,9 +23,9 @@ const scene: Scene = {
   name: 'test',
   camera: { target: [0, 0, 0], yaw: 0, pitch: 0.3, distance: 5 },
   materials: {
-    floor: { kind: 'checker', a: [1, 2, 3], b: [4, 5, 6], cellSize: 2, reflectivity: 0.25 },
-    shiny: { kind: 'mirror', tint: [7, 8, 9] },
-    lamp: { kind: 'diffuse', albedo: [0, 0, 0], emission: { color: [1, 0.5, 0.25], strength: 4 } },
+    floor: { baseColor: { a: [1, 2, 3], b: [4, 5, 6], cellSize: 2 } },
+    shiny: { baseColor: [7, 8, 9], roughness: 0.25, metallic: 0.5, ior: 2 },
+    lamp: { baseColor: [0, 0, 0], emission: { color: [1, 0.5, 0.25], strength: 4 } },
   },
   ground: 'floor',
   spheres: [
@@ -59,14 +60,16 @@ test('scene info, spheres and materials land where tracer.wgsl expects', () => {
 
   assert.equal(packed.materials.byteLength, 3 * MATERIAL_BYTES);
   const materialFloats = new Float32Array(packed.materials);
-  const materialInts = new Uint32Array(packed.materials);
-  assert.deepEqual([...materialFloats.subarray(0, 3)], [1, 2, 3]);
-  assert.equal(materialInts[3], MATERIAL_KIND.checker);
-  assert.deepEqual([...materialFloats.subarray(4, 8)], [4, 5, 6, 2]);
-  assert.deepEqual([...materialFloats.subarray(8, 12)], [0, 0, 0, 0.25]); // no glow; reflectivity
-  assert.deepEqual([...materialFloats.subarray(12, 15)], [7, 8, 9]);
-  assert.equal(materialInts[15], MATERIAL_KIND.mirror);
-  assert.deepEqual([...materialFloats.subarray(32, 35)], [4, 2, 1]); // lamp: color × strength
+  // floor: a checker, with the defaults filled in.
+  assert.deepEqual([...materialFloats.subarray(0, 4)], [1, 2, 3, 1]); // color a; roughness
+  assert.deepEqual([...materialFloats.subarray(4, 8)], [4, 5, 6, 2]); // color b; cellSize
+  assert.deepEqual([...materialFloats.subarray(8, 13)], [0, 0, 0, 0, 1.5]); // no glow; metallic; ior
+  // shiny: a plain color (cellSize 0), with every value set.
+  assert.deepEqual([...materialFloats.subarray(16, 20)], [7, 8, 9, 0.25]);
+  assert.equal(materialFloats[23], 0);
+  assert.deepEqual([...materialFloats.subarray(27, 29)], [0.5, 2]);
+  // lamp: color × strength.
+  assert.deepEqual([...materialFloats.subarray(40, 43)], [4, 2, 1]);
 });
 
 test('boxes store their center, half size and rotation columns', () => {
@@ -122,6 +125,13 @@ test('mistakes in a layout are errors, not wrong pictures', () => {
   assert.throws(() => packScene({ ...scene, ground: 'lava' }), /lava/);
   assert.throws(() => packScene({ ...scene, spheres: [{ center: [0, 0, 0], radius: 1, material: 'lava' }] }), /lava/);
   assert.throws(() => packScene({ ...scene, boxes: [{ center: [0, 0, 0], size: [1, 0, 1], material: 'lamp' }] }), /size/);
+  const withMaterial = (material: Material): Scene => ({ ...scene, materials: { ...scene.materials, odd: material } });
+  const plain: Vec3 = [1, 1, 1];
+  assert.throws(() => packScene(withMaterial({ baseColor: plain, roughness: 1.5 })), /"odd".*roughness/);
+  assert.throws(() => packScene(withMaterial({ baseColor: plain, metallic: -1 })), /"odd".*metallic/);
+  assert.throws(() => packScene(withMaterial({ baseColor: plain, ior: 0.5 })), /"odd".*ior/);
+  // cellSize 0 means "plain color" to the shader, so a checker can't use it.
+  assert.throws(() => packScene(withMaterial({ baseColor: { a: plain, b: plain, cellSize: 0 } })), /"odd".*cellSize/);
 });
 
 test('withSphereHeight moves one sphere and leaves the original scene alone', () => {
@@ -135,7 +145,7 @@ test('withSphereHeight moves one sphere and leaves the original scene alone', ()
   assert.deepEqual(scene.spheres[0]?.center, [1, 2, 3]);
 });
 
-test('kind numbers and NO_GROUND match the constants in tracer.wgsl', () => {
+test('light kinds and NO_GROUND match the constants in tracer.wgsl', () => {
   const constants = (prefix: string): Record<string, number> =>
     Object.fromEntries(
       [...wgsl.matchAll(new RegExp(`^const ${prefix}_(\\w+) = (\\d+)u;`, 'gm'))].map((m) => [
@@ -143,7 +153,12 @@ test('kind numbers and NO_GROUND match the constants in tracer.wgsl', () => {
         Number(m[2]),
       ]),
     );
-  assert.deepEqual(constants('KIND'), MATERIAL_KIND);
   assert.deepEqual(constants('LIGHT'), LIGHT_KIND);
   assert.match(wgsl, new RegExp(`^const NO_GROUND = ${NO_GROUND}u;`, 'm'));
+});
+
+test("the shader's Material fields are in the order packScene writes them", () => {
+  const body = /^struct Material \{([^}]*)\}/m.exec(wgsl)?.[1] ?? '';
+  const fields = [...body.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+  assert.deepEqual(fields, ['colorA', 'roughness', 'colorB', 'cellSize', 'emission', 'metallic', 'ior']);
 });

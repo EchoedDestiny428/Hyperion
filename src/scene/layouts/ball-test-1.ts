@@ -6,11 +6,11 @@ export const ballTest1: Scene = {
   name: 'ball-test-1',
   camera: { target: [0, 0.8, 0], yaw: 0.6, pitch: 0.35, distance: 9 },
   materials: {
-    checker: { kind: 'checker', a: [0.8, 0.8, 0.8], b: [0.12, 0.12, 0.12], cellSize: 1 },
-    red: { kind: 'diffuse', albedo: [0.75, 0.05, 0.04] },
-    blue: { kind: 'diffuse', albedo: [0.03, 0.08, 0.6] },
-    chrome: { kind: 'mirror', tint: [0.95, 0.95, 0.95] },
-    gold: { kind: 'mirror', tint: [1.0, 0.78, 0.34] },
+    checker: { baseColor: { a: [0.8, 0.8, 0.8], b: [0.12, 0.12, 0.12], cellSize: 1 } },
+    red: { baseColor: [0.75, 0.05, 0.04] },
+    blue: { baseColor: [0.03, 0.08, 0.6] },
+    chrome: { baseColor: [0.95, 0.95, 0.95], metallic: 1, roughness: 0 },
+    gold: { baseColor: [1.0, 0.78, 0.34], metallic: 1, roughness: 0 },
   },
   ground: 'checker',
   spheres: [

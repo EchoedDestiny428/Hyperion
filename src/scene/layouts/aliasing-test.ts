@@ -20,10 +20,10 @@ export const aliasingTest: Scene = {
   materials: {
     // Small, high-contrast squares: in the distance many fit in one pixel,
     // which makes moiré (false wavy patterns) without anti-aliasing.
-    fineChecker: { kind: 'checker', a: [0.9, 0.9, 0.9], b: [0.02, 0.02, 0.02], cellSize: 0.25 },
-    chrome: { kind: 'mirror', tint: [0.95, 0.95, 0.95] },
-    charcoal: { kind: 'diffuse', albedo: [0.02, 0.02, 0.025] },
-    orange: { kind: 'diffuse', albedo: [0.9, 0.35, 0.05] },
+    fineChecker: { baseColor: { a: [0.9, 0.9, 0.9], b: [0.02, 0.02, 0.02], cellSize: 0.25 } },
+    chrome: { baseColor: [0.95, 0.95, 0.95], metallic: 1, roughness: 0 },
+    charcoal: { baseColor: [0.02, 0.02, 0.025] },
+    orange: { baseColor: [0.9, 0.35, 0.05] },
   },
   ground: 'fineChecker',
   spheres: [

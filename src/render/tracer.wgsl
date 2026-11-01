@@ -83,18 +83,16 @@ struct Box {
   rotation: mat3x3f, // columns: where the box's own x, y and z axes point
 }
 
-// Material kinds. Must match MATERIAL_KIND in scene/scene.ts (scene.test.ts checks).
-const KIND_DIFFUSE = 0u; // matte, colored by colorA
-const KIND_MIRROR = 1u; // perfect reflection, tinted by colorA
-const KIND_CHECKER = 2u; // matte squares of colorA and colorB, cellSize meters wide
-
+// One material model for every surface, set by numbers. Field order must match
+// packScene in scene/scene.ts (scene.test.ts checks).
 struct Material {
-  colorA: vec3f,
-  kind: u32,
-  colorB: vec3f,
-  cellSize: f32,
+  colorA: vec3f, // baseColor, or a checker's first color
+  roughness: f32, // 0 polished .. 1 fully rough
+  colorB: vec3f, // a checker's second color
+  cellSize: f32, // width of a checker's squares in meters; 0 for a plain color
   emission: vec3f, // light it gives off by itself; black for most materials
-  reflectivity: f32, // matte kinds: the share reflected like a mirror coat
+  metallic: f32, // 0 non-metal .. 1 metal
+  ior: f32, // index of refraction
 }
 
 // The glowing objects, for aiming shadow rays at them. Must match LIGHT_KIND
@@ -489,15 +487,38 @@ fn lightFromObjectsWhitted(position: vec3f, normal: vec3f) -> vec3f {
 }
 
 // ---- Surfaces ------------------------------------------------------------
-// The color a surface reflects: a matte surface's albedo, or a mirror's tint.
+// The baseColor at a point: a non-metal's albedo, or a metal's tint.
 fn surfaceColor(material: Material, position: vec3f) -> vec3f {
-  if (material.kind == KIND_CHECKER) {
+  if (material.cellSize > 0.0) {
     // Squares cellSize wide: the parity of the integer square coordinates
     // picks the color.
     let cell = vec2i(floor(position.xz / material.cellSize));
     return select(material.colorA, material.colorB, ((cell.x + cell.y) & 1) == 1);
   }
   return material.colorA;
+}
+
+// The Fresnel effect: every surface reflects more at a grazing angle, and at
+// the very edge it's a perfect mirror. `f0` is how much it reflects head-on,
+// and `cosine` is 1 head-on and 0 at the edge. This is Schlick's approximation,
+// which glTF uses: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#fresnel
+// The power is multiplied out because WGSL defines pow() through log2(x), which
+// has no finite value at x = 0: https://www.w3.org/TR/WGSL/#floating-point-accuracy
+fn fresnel(f0: vec3f, cosine: f32) -> vec3f {
+  let c = 1.0 - cosine;
+  return f0 + (1.0 - f0) * (c * c * c * c * c);
+}
+
+// The share of light a non-metal reflects like a mirror at this angle. Its f0
+// comes from the index of refraction, and is 0.04 for the usual 1.5. Only a
+// fully polished surface reflects so far, because a rough one's reflection
+// should be blurred, which isn't built yet.
+fn polishedShare(material: Material, cosine: f32) -> f32 {
+  if (material.roughness > 0.0) {
+    return 0.0;
+  }
+  let r = (1.0 - material.ior) / (1.0 + material.ior);
+  return fresnel(vec3f(r * r), cosine).x;
 }
 
 // Fade distant surfaces into the sky color, like haze. In C0 it also hid the
@@ -525,11 +546,12 @@ fn traceWhitted(primary: Ray) -> vec3f {
 
     let material = materials[hit.material];
     color += throughput * material.emission; // glowing surfaces show their own light
-    let reflected = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
-    if (material.kind == KIND_MIRROR) {
-      // Perfect mirror: reflect the direction about the normal and continue.
-      throughput *= material.colorA; // the tint
-      ray = reflected;
+    if (material.metallic >= 0.5) {
+      // This renderer stays a simple comparison: metals are perfect mirrors
+      // with a fixed tint, and everything else is matte. Reflect the direction
+      // about the normal and continue.
+      throughput *= surfaceColor(material, hit.position);
+      ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
       continue;
     }
 
@@ -545,14 +567,7 @@ fn traceWhitted(primary: Ray) -> vec3f {
     // and from other surfaces is faked with a constant "ambient" term.
     let ambient = vec3f(0.16, 0.2, 0.28) * (0.5 + 0.5 * hit.normal.y) * scene.skyStrength;
     let surface = surfaceColor(material, hit.position) * (direct + ambient);
-    // A mirror coat reflects part of the light; the rest is the matte color.
-    let coat = material.reflectivity;
-    color += throughput * (1.0 - coat) * haze(surface, hit.t, ray.dir, toSun);
-    if (coat <= 0.0) {
-      return color;
-    }
-    throughput *= coat;
-    ray = reflected;
+    return color + throughput * haze(surface, hit.t, ray.dir, toSun);
   }
   return color; // ran out of bounces between mirrors
 }
@@ -593,17 +608,22 @@ fn tracePath(primary: Ray) -> vec3f {
       light += throughput * material.emission;
     }
     let reflected = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
-    if (material.kind == KIND_MIRROR) {
-      throughput *= material.colorA;
+    let albedo = surfaceColor(material, hit.position);
+    let cosView = saturate(-dot(ray.dir, hit.normal));
+
+    // A metal reflects all the light that reaches it, tinted by its color, and
+    // has no matte part. `metallic` blends metal and non-metal; choosing one
+    // at random with exactly those odds is right on average.
+    if (material.metallic > 0.0 && random() < material.metallic) {
+      throughput *= fresnel(albedo, cosView);
       ray = reflected;
       countLights = true;
       continue;
     }
 
-    // Matte surface, possibly with a mirror coat that reflects a share
-    // `coat` of the light. The matte part gets (1 - coat) of everything.
-    let coat = material.reflectivity;
-    let albedo = surfaceColor(material, hit.position);
+    // A non-metal is a matte surface under a clear layer that reflects a
+    // share `coat` of the light. The matte part gets (1 - coat) of everything.
+    let coat = polishedShare(material, cosView);
 
     // First, light arriving directly, through shadow rays: one toward a
     // random point on the sun ("next-event estimation") and one toward a
@@ -618,11 +638,11 @@ fn tracePath(primary: Ray) -> vec3f {
     light += throughput * (1.0 - coat) * albedo * direct;
 
     // Then continue the path. With probability `coat` it reflects off the
-    // coat like a mirror; otherwise it bounces off the matte surface. Choosing
-    // one at random, with exactly those odds, is right on average.
+    // clear layer like a mirror; otherwise it bounces off the matte surface.
+    // Choosing one at random, with exactly those odds, is right on average.
     if (random() < coat) {
       ray = reflected;
-      countLights = true; // the coat's reflection of a light isn't covered by shadow rays
+      countLights = true; // a reflection of a light isn't covered by shadow rays
       continue;
     }
 
@@ -685,8 +705,8 @@ fn debugView(primary: Ray) -> vec3f {
     }
     travelled += hit.t;
     let material = materials[hit.material];
-    if (material.kind == KIND_MIRROR) {
-      tint *= material.colorA;
+    if (material.metallic >= 0.5) {
+      tint *= surfaceColor(material, hit.position);
       ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
       continue;
     }

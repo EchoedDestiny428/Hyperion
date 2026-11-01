@@ -13,24 +13,29 @@ export interface Emission {
   strength: number;
 }
 
-// What a surface does with light. Each kind has its own fields, and
-// TypeScript checks that a material has exactly the fields of its kind.
+// Squares of two colors, cellSize meters wide.
+export interface Checker {
+  a: Vec3;
+  b: Vec3;
+  cellSize: number;
+}
+
+// What a surface does with light, set by numbers rather than picked from a
+// list of kinds. It follows glTF's model, so imported models can use it in
+// Act 2: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metallic-roughness-material
 // Any material can also glow (`emission`), which makes it a light source.
-export type Material = (
-  | {
-      kind: 'diffuse'; // matte: lit by the sun, can be in shadow
-      albedo: Vec3;
-      reflectivity?: number; // 0..1: how much reflects like a mirror coat; the rest is matte
-    }
-  | { kind: 'mirror'; tint: Vec3 } // perfect reflection; tint is how much of each color it reflects
-  | {
-      kind: 'checker'; // matte squares of two colors, cellSize meters wide
-      a: Vec3;
-      b: Vec3;
-      cellSize: number;
-      reflectivity?: number;
-    }
-) & { emission?: Emission };
+export interface Material {
+  baseColor: Vec3 | Checker; // a non-metal's color, or the tint of a metal's reflections
+  // 0 is polished, 1 (the default) is fully rough. Blurred reflections aren't
+  // built yet, so for now a metal is always a perfect mirror, and a non-metal
+  // only reflects at exactly 0.
+  roughness?: number;
+  // 0 (the default) is a non-metal, 1 a metal. glTF's own default is 1, but
+  // most surfaces in a hand-written scene aren't metal.
+  metallic?: number;
+  ior?: number; // index of refraction, default 1.5: higher makes a non-metal reflect more
+  emission?: Emission;
+}
 
 export interface Sphere {
   center: Vec3;
@@ -87,9 +92,8 @@ export function withSphereHeight(scene: Scene, index: number, height: number): S
   };
 }
 
-// The numbers the shader uses. Must match the KIND_*, LIGHT_* and NO_GROUND
-// constants in tracer.wgsl; scene.test.ts checks that.
-export const MATERIAL_KIND: Record<Material['kind'], number> = { diffuse: 0, mirror: 1, checker: 2 };
+// The numbers the shader uses. Must match the LIGHT_* and NO_GROUND constants
+// in tracer.wgsl; scene.test.ts checks that.
 export const LIGHT_KIND = { sphere: 0, box: 1 } as const;
 export const NO_GROUND = 0xffffffff;
 
@@ -102,13 +106,13 @@ export const NO_GROUND = 0xffffffff;
 //   Sphere     slot 0..2 center  3 radius  4 material (u32)  5..7 (padding)
 //   Box        slot 0..2 center  3 material (u32)  4..6 halfSize  7 (padding)
 //              8..10, 12..14, 16..18 rotation columns  11, 15, 19 (padding)
-//   Material   slot 0..2 colorA  3 kind (u32)  4..6 colorB  7 cellSize
-//              8..10 emission (color × strength)  11 reflectivity
+//   Material   slot 0..2 colorA  3 roughness  4..6 colorB  7 cellSize (0: plain color)
+//              8..10 emission (color × strength)  11 metallic  12 ior  13..15 (padding)
 //   Light      slot 0 kind (u32)  1 index (u32)  2 cdf  3 probability
 export const SCENE_INFO_BYTES = 32;
 export const SPHERE_BYTES = 32;
 export const BOX_BYTES = 80;
-export const MATERIAL_BYTES = 48;
+export const MATERIAL_BYTES = 64;
 export const LIGHT_BYTES = 16;
 
 export interface PackedScene {
@@ -151,26 +155,26 @@ export function packScene(scene: Scene): PackedScene {
 
   const materials = new ArrayBuffer(MATERIAL_BYTES * Math.max(materialEntries.length, 1));
   const materialFloats = new Float32Array(materials);
-  const materialInts = new Uint32Array(materials);
-  materialEntries.forEach(([, material], i) => {
+  materialEntries.forEach(([name, material], i) => {
+    const { baseColor, roughness = 1, metallic = 0, ior = 1.5 } = material;
+    const problem = (detail: string): Error => new Error(`Scene "${scene.name}", material "${name}": ${detail}`);
+    if (!(roughness >= 0 && roughness <= 1)) throw problem(`roughness is ${roughness}; it must be from 0 to 1`);
+    if (!(metallic >= 0 && metallic <= 1)) throw problem(`metallic is ${metallic}; it must be from 0 to 1`);
+    if (!(ior >= 1)) throw problem(`ior is ${ior}; it can't be below 1, the value for empty space`);
+
     const base = (i * MATERIAL_BYTES) / 4; // in 4-byte slots
-    materialInts[base + 3] = MATERIAL_KIND[material.kind];
-    switch (material.kind) {
-      case 'diffuse':
-        materialFloats.set(material.albedo, base);
-        materialFloats[base + 11] = material.reflectivity ?? 0;
-        break;
-      case 'mirror':
-        materialFloats.set(material.tint, base);
-        break;
-      case 'checker':
-        materialFloats.set(material.a, base);
-        materialFloats.set(material.b, base + 4);
-        materialFloats[base + 7] = material.cellSize;
-        materialFloats[base + 11] = material.reflectivity ?? 0;
-        break;
+    if ('cellSize' in baseColor) {
+      if (!(baseColor.cellSize > 0)) throw problem(`cellSize is ${baseColor.cellSize}; it must be more than 0`);
+      materialFloats.set(baseColor.a, base);
+      materialFloats.set(baseColor.b, base + 4);
+      materialFloats[base + 7] = baseColor.cellSize;
+    } else {
+      materialFloats.set(baseColor, base);
     }
+    materialFloats[base + 3] = roughness;
     materialFloats.set(radiance(material), base + 8);
+    materialFloats[base + 11] = metallic;
+    materialFloats[base + 12] = ior;
   });
 
   // A storage buffer binding can't be smaller than one array element, so an
