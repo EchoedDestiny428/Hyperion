@@ -88,14 +88,15 @@ struct Box {
 // One material model for every surface, set by numbers. Field order must match
 // packScene in scene/scene.ts (scene.test.ts checks).
 struct Material {
-  colorA: vec3f, // baseColor, or a checker's first color
+  colorA: vec3f, // baseColor, a checker's first color, or the tiles' color
   roughness: f32, // 0 polished .. 1 fully rough
-  colorB: vec3f, // a checker's second color
-  cellSize: f32, // width of a checker's squares in meters; 0 for a plain color
+  colorB: vec3f, // a checker's second color, or the grout's color
+  cellSize: f32, // width of a checker's squares or of tiles in meters; 0 for a plain color
   emission: vec3f, // light it gives off by itself; black for most materials
   metallic: f32, // 0 non-metal .. 1 metal
   ior: f32, // index of refraction
   transmission: f32, // the share of a non-metal's light that passes through
+  groutWidth: f32, // width of the lines between tiles in meters; 0 for anything but tiles
 }
 
 // The glowing objects, for aiming shadow rays at them. Must match LIGHT_KIND
@@ -291,11 +292,15 @@ fn seedRandom(pixel: vec2u, sampleNumber: u32) {
   rngState = pcgHash(pixel.x + pcgHash(pixel.y + pcgHash(sampleNumber)));
 }
 
-// A random number in [0, 1). Uses the top 24 bits, because an f32 holds 24
+// A hash as a number in [0, 1). Uses the top 24 bits, because an f32 holds 24
 // bits exactly; converting all 32 could round up to 1.0.
+fn unitFromHash(hash: u32) -> f32 {
+  return f32(hash >> 8u) / 16777216.0;
+}
+
 fn random() -> f32 {
   rngState = pcgHash(rngState);
-  return f32(rngState >> 8u) / 16777216.0;
+  return unitFromHash(rngState);
 }
 
 // A random direction, every direction equally likely.
@@ -507,12 +512,53 @@ fn lightFromObjectsWhitted(position: vec3f, normal: vec3f) -> vec3f {
 }
 
 // ---- Surfaces ------------------------------------------------------------
+// Flattens a point onto the plane its surface mostly lies in, so that patterns
+// run across a wall instead of smearing down it. There are three choices, one
+// for each axis the surface can face, so a pattern on a sphere has seams.
+fn flatten(position: vec3f, normal: vec3f) -> vec2f {
+  let facing = abs(normal);
+  if (facing.y >= facing.x && facing.y >= facing.z) {
+    return position.xz;
+  }
+  return select(position.xy, position.zy, facing.x >= facing.z);
+}
+
+// How much tiles differ. No two real tiles match: each is a slightly different
+// shade, and each is set at a slightly different angle, which breaks a
+// reflection up at every tile. A perfectly flat floor looks computer-made.
+const TILE_SHADE = 0.08; // the brightest and darkest tile differ by this share
+const TILE_TILT = 0.01; // sideways lean of a tile's normal, at most ±0.3° each way
+const GROUT_ROUGHNESS = 0.9; // cement, between glazed tiles
+
+struct TileSpot {
+  inGrout: bool,
+  id: u32, // the same all over one tile, and unrelated to its neighbors'
+}
+
+fn tileAt(material: Material, position: vec3f, normal: vec3f) -> TileSpot {
+  let grid = flatten(position, normal) / material.cellSize;
+  // Distance from the middle of the tile, as a share of its width: 0.5 is the edge.
+  let fromMiddle = abs(fract(grid) - 0.5);
+  let cell = vec2i(floor(grid));
+  return TileSpot(
+    max(fromMiddle.x, fromMiddle.y) > 0.5 - 0.5 * material.groutWidth / material.cellSize,
+    pcgHash(bitcast<u32>(cell.x) + pcgHash(bitcast<u32>(cell.y))),
+  );
+}
+
 // The baseColor at a point: a non-metal's albedo, or a metal's tint.
-fn surfaceColor(material: Material, position: vec3f) -> vec3f {
+fn surfaceColor(material: Material, position: vec3f, normal: vec3f) -> vec3f {
+  if (material.groutWidth > 0.0) {
+    let spot = tileAt(material, position, normal);
+    if (spot.inGrout) {
+      return material.colorB;
+    }
+    return material.colorA * (1.0 + TILE_SHADE * (unitFromHash(spot.id) - 0.5));
+  }
   if (material.cellSize > 0.0) {
     // Squares cellSize wide: the parity of the integer square coordinates
     // picks the color.
-    let cell = vec2i(floor(position.xz / material.cellSize));
+    let cell = vec2i(floor(flatten(position, normal) / material.cellSize));
     return select(material.colorA, material.colorB, ((cell.x + cell.y) & 1) == 1);
   }
   return material.colorA;
@@ -569,14 +615,27 @@ fn surfaceAt(material: Material, hit: Hit, ray: Ray) -> Surface {
   var s: Surface;
   s.entering = dot(ray.dir, hit.normal) < 0.0;
   s.normal = select(-hit.normal, hit.normal, s.entering);
+  var roughness = material.roughness;
+  if (material.groutWidth > 0.0) {
+    let spot = tileAt(material, hit.position, hit.normal);
+    if (spot.inGrout) {
+      roughness = GROUT_ROUGHNESS;
+    } else {
+      // Hashes of the tile's id, not random(): a tile keeps its lean in every
+      // sample, while the pixel's random numbers carry on unchanged.
+      let lean = vec2f(unitFromHash(pcgHash(spot.id)), unitFromHash(pcgHash(spot.id + 1u))) - 0.5;
+      let side = perpendiculars(s.normal);
+      s.normal = normalize(s.normal + (side[0] * lean.x + side[1] * lean.y) * TILE_TILT);
+    }
+  }
   s.tangents = perpendiculars(s.normal);
   s.toView = -ray.dir;
   s.cosView = max(dot(s.normal, s.toView), 1e-5);
-  s.alpha = material.roughness * material.roughness;
-  s.polished = material.roughness < POLISHED_ROUGHNESS;
+  s.alpha = roughness * roughness;
+  s.polished = roughness < POLISHED_ROUGHNESS;
   s.eta = 1.0;
 
-  let color = surfaceColor(material, hit.position);
+  let color = surfaceColor(material, hit.position, hit.normal);
   if (material.metallic > 0.0 && random() < material.metallic) {
     // A metal absorbs any light that enters it, so it's only a tinted
     // reflection, with no matte layer.
@@ -778,7 +837,12 @@ fn sampleGlass(s: Surface, position: vec3f) -> Bounce {
 
 // Fade distant surfaces into the sky color, like haze. In C0 it also hid the
 // checkerboard flickering near the horizon; anti-aliasing now fixes that.
+// Only scenes with a ground plane are out in the open. In a room, this would
+// tint the walls with a sky that can't be seen from there.
 fn haze(surface: vec3f, distance: f32, dir: vec3f, toSun: vec3f) -> vec3f {
+  if (scene.groundMaterial == NO_GROUND) {
+    return surface;
+  }
   return mix(surface, sky(dir, toSun, true), 1.0 - exp(-distance * 0.012));
 }
 
@@ -805,7 +869,7 @@ fn traceWhitted(primary: Ray) -> vec3f {
       // This renderer stays a simple comparison: metals are perfect mirrors
       // with a fixed tint, and everything else is matte. Reflect the direction
       // about the normal and continue.
-      throughput *= surfaceColor(material, hit.position);
+      throughput *= surfaceColor(material, hit.position, hit.normal);
       ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
       continue;
     }
@@ -821,7 +885,7 @@ fn traceWhitted(primary: Ray) -> vec3f {
     // Whitted ray tracing has no bounce light, so light arriving from the sky
     // and from other surfaces is faked with a constant "ambient" term.
     let ambient = vec3f(0.16, 0.2, 0.28) * (0.5 + 0.5 * hit.normal.y) * scene.skyStrength;
-    let surface = surfaceColor(material, hit.position) * (direct + ambient);
+    let surface = surfaceColor(material, hit.position, hit.normal) * (direct + ambient);
     return color + throughput * haze(surface, hit.t, ray.dir, toSun);
   }
   return color; // ran out of bounces between mirrors
@@ -966,13 +1030,13 @@ fn debugView(primary: Ray) -> vec3f {
     travelled += hit.t;
     let material = materials[hit.material];
     if (material.metallic >= 0.5) {
-      tint *= surfaceColor(material, hit.position);
+      tint *= surfaceColor(material, hit.position, hit.normal);
       ray = Ray(hit.position + hit.normal * EPSILON, reflect(ray.dir, hit.normal));
       continue;
     }
     switch frame.view {
       case VIEW_COLOR: {
-        return tint * surfaceColor(material, hit.position); // the albedo
+        return tint * surfaceColor(material, hit.position, hit.normal); // the albedo
       }
       case VIEW_NORMALS: {
         return hit.normal * 0.5 + 0.5; // each axis from -1..1 to 0..1

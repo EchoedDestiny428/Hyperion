@@ -72,6 +72,22 @@ test('scene info, spheres and materials land where tracer.wgsl expects', () => {
   assert.deepEqual([...materialFloats.subarray(40, 43)], [4, 2, 1]);
 });
 
+test('tiles pack their two colors, size and grout width', () => {
+  const tiled: Scene = {
+    ...scene,
+    materials: { wall: { baseColor: { tile: [1, 2, 3], grout: [4, 5, 6], cellSize: 0.5, groutWidth: 0.25 } } },
+    ground: 'wall',
+    spheres: [],
+    boxes: [],
+  };
+  const floats = new Float32Array(packScene(tiled).materials);
+  assert.deepEqual([...floats.subarray(0, 3)], [1, 2, 3]);
+  assert.deepEqual([...floats.subarray(4, 8)], [4, 5, 6, 0.5]);
+  assert.equal(floats[14], 0.25);
+  // Everything else leaves it at 0, which tells the shader there are no tiles.
+  assert.equal(new Float32Array(packScene(scene).materials)[14], 0);
+});
+
 test('glowing objects store the chance of a shadow ray aiming at each square meter', () => {
   const packed = packScene(scene);
   // The one light, a 2 × 4 × 6 box: always picked, with 88 m² of surface.
@@ -141,6 +157,13 @@ test('mistakes in a layout are errors, not wrong pictures', () => {
   assert.throws(() => packScene(withMaterial({ baseColor: plain, ior: 0.5 })), /"odd".*ior/);
   // cellSize 0 means "plain color" to the shader, so a checker can't use it.
   assert.throws(() => packScene(withMaterial({ baseColor: { a: plain, b: plain, cellSize: 0 } })), /"odd".*cellSize/);
+  const tiles = (cellSize: number, groutWidth: number): Material => ({
+    baseColor: { tile: plain, grout: plain, cellSize, groutWidth },
+  });
+  assert.throws(() => packScene(withMaterial(tiles(0, 0.1))), /"odd".*cellSize/);
+  // groutWidth 0 means "not tiles" to the shader, and a line as wide as a tile leaves no tile.
+  assert.throws(() => packScene(withMaterial(tiles(1, 0))), /"odd".*groutWidth/);
+  assert.throws(() => packScene(withMaterial(tiles(1, 1))), /"odd".*groutWidth/);
 });
 
 test('withSphereHeight moves one sphere and leaves the original scene alone', () => {
@@ -169,5 +192,15 @@ test('light kinds and NO_GROUND match the constants in tracer.wgsl', () => {
 test("the shader's Material fields are in the order packScene writes them", () => {
   const body = /^struct Material \{([^}]*)\}/m.exec(wgsl)?.[1] ?? '';
   const fields = [...body.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
-  assert.deepEqual(fields, ['colorA', 'roughness', 'colorB', 'cellSize', 'emission', 'metallic', 'ior', 'transmission']);
+  assert.deepEqual(fields, [
+    'colorA',
+    'roughness',
+    'colorB',
+    'cellSize',
+    'emission',
+    'metallic',
+    'ior',
+    'transmission',
+    'groutWidth',
+  ]);
 });

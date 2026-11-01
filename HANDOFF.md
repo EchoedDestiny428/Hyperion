@@ -10,16 +10,20 @@ For whoever picks this up next, human or agent. Updated 2026-11-01 at the end of
   - chunk 2: path tracer (bounce light, sky light, soft sun shadows, Russian roulette), the Renderer menu (Whitted kept for comparison), GPU timing;
   - chunk 3: rotated boxes, glowing materials with light sampling, per-scene sun and sky, the `neon-night` scene. The Cornell box is deferred.
   - optimization pass paused: the benchmark, the first speedup and the desktop GPU test are in; see below.
-  - chunk 4 in progress, step 10 done: one material set by numbers instead of kinds, Fresnel, GGX rough surfaces, multiple importance sampling (MIS), glass (clear and frosted), wet asphalt on `neon-night`, the `material-test` scene.
+  - chunk 4 done: one material set by numbers instead of kinds, Fresnel, GGX rough surfaces, multiple importance sampling (MIS), glass (clear and frosted), wet asphalt on `neon-night`, the `material-test` scene, procedural tiles and the `dreamspace` room.
   - also: fly camera (WASD), arrow-key orbit, full 360° turning, scene sliders, the `shadow-heights` and `aliasing-test` scenes.
-- **Checks:** `npm run typecheck`, `npm test` (65 passing) and `npm run build` all pass.
-- **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 27. Keep adding a section per change, in the same plain style.
+- **Checks:** `npm run typecheck`, `npm test` (66 passing) and `npm run build` all pass.
+- **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 31. Keep adding a section per change, in the same plain style.
 
-## Next: chunk 4, real materials
+## Next: finish C1
 
-Photo quality comes before more optimization (decided 2026-11-01). Chunk 4's materials and the dreamspace room will change what's slow, so the rest of the optimization pass waits for them. That part of `docs/PLAN.md` holds the order for afterward.
+Photo quality came before more optimization (decided 2026-11-01), and the room now exists, so what's slow can be measured. In order, each needing approval first:
 
-Step 10 in `docs/PLAN.md` is done. The rest of chunk 4 is steps 11 and 12, the first-person camera and the dreamspace room, which need approval first. The room will show the known gap with glass: shadow rays stop at it, so a pool's floor gets little sunlight.
+1. The Cornell box (step 9), which C1's done list requires. Its measurements need a source; see `docs/PLAN.md`.
+2. Finish the learning note (step 15).
+3. The rest of the optimization pass: skip box faces pointing away, with a way to measure noise, then a BVH. `dreamspace` is the scene to measure on.
+
+Then C2. The fly camera's pointer lock, walking and collisions wait for C2 too.
 
 ## Testing on another machine
 
@@ -89,11 +93,15 @@ Stage 1 of the new materials made the path tracer slightly slower on the desktop
 
 The rest of step 10 (GGX, MIS, glass) on the same GPU, compared with stage 1 and every round agreeing: `ball-test-1` 0.25 to 0.34 ms (+36%), `aliasing-test` 0.37 to 0.44 ms (+16%), `shadow-heights` 0.22 to 0.29 ms (+32%). `neon-night` went from 1.17 to 1.21 ms (+3.4%), but its materials changed too, so it isn't like for like. The enlarged `material-test` takes 1.02 ms. Not measured on the laptop.
 
+The `dreamspace` room is by far the slowest scene. On the same desktop GPU in one session, p50 / p99: Whitted 3.62 / 3.89 ms and path 10.98 / 11.66 ms, against `neon-night`'s 0.73 / 0.91 ms and 1.21 / 1.55 ms in that session. So it's 5× slower in Whitted, which comes down to the objects themselves, and 9× in the path tracer, where paths also run longer. It hasn't been measured on the laptop. Scaling by the 17–21× above suggests 190–230 ms per sample there, or about 4 samples a second and 4 minutes for 1,024. That's an estimate, and it's the case `docs/PLAN.md` holds lower resolution while moving for.
+
+The room's shader changes (patterns, tiles, haze) cost nothing measurable elsewhere: compared on the same GPU with the same code before them, path tracer, every scene showed 0.0% (not clear), and all 20 before and after screenshots of the other scenes were byte-identical.
+
 Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
 
 ## Where things live
 
-- `src/render/tracer.wgsl`: both renderers (`traceWhitted`, `tracePath`), materials (`surfaceAt`, `scatterToward`, `sampleBounce`, `sampleGlass`), debug views, light sampling, accumulation, tone mapping.
+- `src/render/tracer.wgsl`: both renderers (`traceWhitted`, `tracePath`), materials (`surfaceAt`, `scatterToward`, `sampleBounce`, `sampleGlass`), patterns (`flatten`, `tileAt`, `surfaceColor`), debug views, light sampling, accumulation, tone mapping.
 - `src/render/tracer-pass.ts`: pipeline, buffers, bind group (binding numbers match the shader).
 - `src/scene/scene.ts`: the scene format and `packScene` byte layouts; `src/scene/layouts/` holds the scenes, `registry.ts` lists them.
 - `src/render/accumulation.ts`: when to restart, pacing, sample limits.
@@ -108,6 +116,8 @@ Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no g
 - **WGSL may assume no infinities or NaNs,** so don't rely on `1.0 / 0.0`. The box slab test nudges zero direction components instead.
 - **Testing on a real GPU without a visible window:** `scripts/benchmark.ts` shows how. Run Edge (or Chrome) headless with `--remote-debugging-port` and an *absolute* `--user-data-dir`; a relative one makes Edge show an error dialog on the desktop. `--dump-dom` returns before async WebGPU work finishes, so drive the page over the DevTools protocol instead: `Runtime.evaluate` with `awaitPromise`, `Emulation.setDeviceMetricsOverride` for the size, `Page.captureScreenshot`, `Browser.close` when done. The HUD text gives sample counts and GPU times. Screenshots early in a session have twice come back tiled, cause unknown. Retaking them was fine, so render one throwaway image first, and retake a surprising result before trusting it.
 - **Same image, same bytes.** Random numbers come from the pixel and sample number, so at a fixed sample count identical code gives a byte-identical picture, as long as each pixel asks for the same random numbers in the same order. That makes before and after screenshots a strong check on any change that shouldn't alter the image.
+- **The room's sun depends on `sunDirection()`.** `dreamspace` is laid out so the sun lands on the deck, not the water, which blocks shadow rays. Changing the sun's direction, or ticking "Sun moves", changes that.
+- **Only the listed sample counts work when driving the page.** The Samples menu offers 1, 4, 16, 64, 256 and 1,024. Setting any other value from a script leaves a very noisy image, which looks like a rendering bug.
 
 ## Conventions
 

@@ -36,6 +36,7 @@ const sceneSliders = requireElement('scene-sliders', HTMLElement);
 // them; each frame draws whatever they are at that moment.
 let scene = initialScene();
 const settings = defaultSettings();
+settings.cameraMode = scene.cameraMode ?? 'orbit';
 
 // Two cameras; settings.cameraMode says which one is in use. The orbit starts
 // as a copy of the scene's view, so moving doesn't edit the layout.
@@ -84,9 +85,10 @@ const showSliders = (shown: Scene): void =>
 showSliders(scene);
 attachScenePicker(sceneSelect, SCENES, scene, (picked) => {
   scene = picked;
-  // Each scene starts from its own orbit view.
+  // Each scene starts from its own view, in its own choice of camera.
   Object.assign(orbit, picked.camera);
-  settings.cameraMode = 'orbit';
+  Object.assign(fly, flyFromOrbit(orbit, fly.speed));
+  settings.cameraMode = picked.cameraMode ?? 'orbit';
   panel.sync();
   showSliders(picked);
   rememberScene(picked);

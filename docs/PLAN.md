@@ -83,7 +83,7 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 - Tried and dropped: "any hit" shadow rays that stop at the first blocker. No gain in these open scenes, where most shadow rays are never blocked. Retest once there's a BVH.
 - Tried and dropped: separate shaders per renderer and view. Even a shader holding only the path tracer showed no clear gain.
 - Paused on 2026-11-01: photo quality comes first, because chunk 4's materials and the dreamspace room will change what's slow.
-- Next, once the room exists: light sampling that skips box faces pointing away, with a way to measure noise, since the benchmark only measures time; then a BVH over spheres and boxes, pulled forward from Act 2.
+- Next, now that the room exists: light sampling that skips box faces pointing away, with a way to measure noise, since the benchmark only measures time; then a BVH over spheres and boxes, pulled forward from Act 2.
 - Lower resolution while the camera moves comes sooner if chunk 4 makes the laptop too slow to work on.
 
 *Chunk 4: real materials*
@@ -98,9 +98,13 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
    - Done in four stages: the new format and Fresnel; GGX rough metal with MIS; rough non-metals and wet asphalt; `transmission` and glass, clear and frosted.
    - Also added along the way: the path tracer's sun disk now has the sun's real brightness, because MIS needs shadow rays and reflections to find the same sun; and a cap on light after a scattering bounce, because that real sun made fireflies (like Clamp Indirect in Blender's Cycles).
    - Known gaps: glass blocks shadow rays, so its shadows are too dark and it throws no caustics; very rough metal and glass come out too dark, because tiny mirrors lose the light that bounces between them (Heitz et al., 2016, describe a fix).
-11. **A first-person camera:** done early, as a floating "Fly" camera (WASD, Q/E, drag to look, all the way around) next to the orbit camera. Still open: pointer lock for mouse look, walking with gravity and collisions for the dreamspace, and letting each scene choose its starting camera.
-12. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled room or hallway with a pool, lit by glowing ceiling panels and daylight through an opening. It uses every material: glass or water, rough and smooth metal, matte, and glowing surfaces. Tiles are checker patterns until image textures arrive.
+11. **A first-person camera:** done early, as a floating "Fly" camera (WASD, Q/E, drag to look, all the way around) next to the orbit camera. Each scene now chooses its starting camera (`cameraMode`). Still open: pointer lock for mouse look, and walking with gravity and collisions. Both wait for C2, since moving views stay rough until then.
+12. **The dreamspace room,** the showcase scene and a first step toward the long-term target. It's built from boxes: a tiled hall with a pool, lit by glowing ceiling panels and daylight through a wall of windows. It uses every material: water, rough and smooth metal, matte, frosted glass and glowing surfaces.
+    - **Procedural tiles (decided 2026-11-01, replacing checker tiles):** drawn by the shader with no image files. Each tile has grout around it and its own slight shade and angle, because a checker floor wouldn't pass for a photo. They last until image textures arrive.
+    - Patterns now follow the plane each surface lies in, so checker and tiles work on walls.
+    - Haze only applies to scenes with a ground plane, because a room can't see the sky it would fade into.
     - Check: standing still inside it, the room refines into an image that could pass for a photo.
+    - Known gaps: at 1,024 samples, a fine grain remains on the ceiling and the pool floor, which get their light from bounce rays alone; light through windows and water is the hardest to find. The water is perfectly flat, with no ripples, and throws no caustics. The view through the windows is empty sky.
 
 *Chunk 5: measuring and explaining*
 

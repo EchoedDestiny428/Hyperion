@@ -19,7 +19,7 @@ export const MIN_SPEED = 0.25;
 export const MAX_SPEED = 50;
 export const FAST_MULTIPLIER = 4; // while Shift is held
 
-export function flyForward(f: Fly): Vec3 {
+export function flyForward(f: Pick<Fly, 'yaw' | 'pitch'>): Vec3 {
   const c = Math.cos(f.pitch);
   return [-Math.sin(f.yaw) * c, Math.sin(f.pitch), -Math.cos(f.yaw) * c];
 }
@@ -41,7 +41,7 @@ export function flyFromOrbit(o: Orbit, speed: number): Fly {
 }
 
 // The orbit camera around the point `distance` ahead that sees the same view.
-export function orbitFromFly(f: Fly, distance: number): Orbit {
+export function orbitFromFly(f: Omit<Fly, 'speed'>, distance: number): Orbit {
   return { target: add(f.position, scale(flyForward(f), distance)), yaw: f.yaw, pitch: -f.pitch, distance };
 }
 

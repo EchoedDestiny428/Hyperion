@@ -1,6 +1,7 @@
 import type { Orbit } from '../camera/orbit.ts';
 import { IDENTITY, rotationFromDegrees } from '../math/mat3.ts';
 import type { Vec3 } from '../math/vec3.ts';
+import type { CameraMode } from '../render/settings.ts';
 
 // A scene layout: the materials, the objects, the light, and where the
 // camera starts. Layouts are plain data (see layouts/); packScene() turns one
@@ -20,12 +21,21 @@ export interface Checker {
   cellSize: number;
 }
 
+// Square tiles cellSize meters wide, with lines of grout groutWidth meters wide
+// between them. The shader gives each tile its own slight shade and angle.
+export interface Tiles {
+  tile: Vec3;
+  grout: Vec3;
+  cellSize: number;
+  groutWidth: number;
+}
+
 // What a surface does with light, set by numbers rather than picked from a
 // list of kinds. It follows glTF's model, so imported models can use it in
 // Act 2: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#metallic-roughness-material
 // Any material can also glow (`emission`), which makes it a light source.
 export interface Material {
-  baseColor: Vec3 | Checker; // a non-metal's color, or the tint of a metal's reflections
+  baseColor: Vec3 | Checker | Tiles; // a non-metal's color, or the tint of a metal's reflections
   roughness?: number; // 0 is polished, 1 (the default) blurs reflections completely
   // 0 (the default) is a non-metal, 1 a metal. glTF's own default is 1, but
   // most surfaces in a hand-written scene aren't metal.
@@ -64,6 +74,7 @@ export const DAYLIGHT: Environment = { sun: [1.6, 1.52, 1.36], sky: 1 };
 export interface Scene {
   name: string; // shown in the scene menu and used in ?scene=
   camera: Orbit; // the starting view
+  cameraMode?: CameraMode; // which camera starts in that view; orbit if left out
   materials: Record<string, Material>;
   ground?: string; // material of the endless ground plane (y = 0); none if left out
   spheres: Sphere[];
@@ -111,7 +122,7 @@ export const NO_GROUND = 0xffffffff;
 //              8..10, 12..14, 16..18 rotation columns  11, 15, 19 (padding)
 //   Material   slot 0..2 colorA  3 roughness  4..6 colorB  7 cellSize (0: plain color)
 //              8..10 emission (color × strength)  11 metallic  12 ior  13 transmission
-//              14..15 (padding)
+//              14 groutWidth (0: not tiles)  15 (padding)
 //   Light      slot 0 kind (u32)  1 index (u32)  2 cdf  3 probability
 export const SCENE_INFO_BYTES = 32;
 export const SPHERE_BYTES = 32;
@@ -168,8 +179,19 @@ export function packScene(scene: Scene): PackedScene {
     if (!(ior >= 1)) throw problem(`ior is ${ior}; it can't be below 1, the value for empty space`);
 
     const base = (i * MATERIAL_BYTES) / 4; // in 4-byte slots
-    if ('cellSize' in baseColor) {
-      if (!(baseColor.cellSize > 0)) throw problem(`cellSize is ${baseColor.cellSize}; it must be more than 0`);
+    if ('cellSize' in baseColor && !(baseColor.cellSize > 0)) {
+      throw problem(`cellSize is ${baseColor.cellSize}; it must be more than 0`);
+    }
+    if ('groutWidth' in baseColor) {
+      const { groutWidth, cellSize } = baseColor;
+      if (!(groutWidth > 0 && groutWidth < cellSize)) {
+        throw problem(`groutWidth is ${groutWidth}; it must be more than 0 and less than cellSize`);
+      }
+      materialFloats.set(baseColor.tile, base);
+      materialFloats.set(baseColor.grout, base + 4);
+      materialFloats[base + 7] = cellSize;
+      materialFloats[base + 14] = groutWidth;
+    } else if ('cellSize' in baseColor) {
       materialFloats.set(baseColor.a, base);
       materialFloats.set(baseColor.b, base + 4);
       materialFloats[base + 7] = baseColor.cellSize;
