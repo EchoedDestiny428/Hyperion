@@ -1,5 +1,6 @@
 import type { Orbit } from '../camera/orbit.ts';
 import { IDENTITY, rotationFromDegrees } from '../math/mat3.ts';
+import { buildBvh, depthFirst, itemsOf, packBvh } from './bvh.ts';
 import type { Vec3 } from '../math/vec3.ts';
 import type { CameraMode } from '../render/settings.ts';
 
@@ -146,6 +147,8 @@ export interface PackedScene {
   boxes: ArrayBuffer; // array<Box>
   materials: ArrayBuffer; // array<Material>
   lights: ArrayBuffer; // array<Light>: the glowing objects, for light sampling
+  bvhNodes: ArrayBuffer; // array<BvhNode>: the tree of boxes around the objects (bvh.ts)
+  bvhItems: ArrayBuffer; // array<u32>: which objects each leaf holds
 }
 
 export function packScene(scene: Scene): PackedScene {
@@ -260,7 +263,8 @@ export function packScene(scene: Scene): PackedScene {
     lightFloats[base + 3] = light.probability;
   });
 
-  return { info, spheres, boxes: boxBuffer, materials, lights: lightBuffer };
+  const bvh = packBvh(depthFirst(buildBvh(itemsOf(scene.spheres, boxes))));
+  return { info, spheres, boxes: boxBuffer, materials, lights: lightBuffer, bvhNodes: bvh.nodes, bvhItems: bvh.items };
 }
 
 // The light a material gives off: color × strength, or black.

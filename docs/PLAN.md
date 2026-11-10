@@ -89,7 +89,8 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 - Paused on 2026-11-01: photo quality comes first, because chunk 4's materials and the dreamspace room will change what's slow.
 - Done: `npm run noise`, which measures noise against a clean reference picture, since the benchmark only measures time. It's exactly repeatable: a build compared with itself gives 0.
 - Done: light sampling aims only at box faces the lit point can see. At 16 samples, 30% less noise in the Cornell box (as clean as 2× the samples) and 14% in `neon-night`, converging to the same pictures; no clear change in the dreamspace, whose noise comes mostly from elsewhere. It costs 6–8% more time per sample, because shadow rays aimed at faces pointing away used to be dropped before being traced. Per second of work that's about 1.9× better in the Cornell box, 1.3× in `neon-night` and about even in the dreamspace.
-- Next: a BVH over spheres and boxes, pulled forward from Act 2.
+- Done: a BVH over spheres and boxes, pulled forward from Act 2: built on the CPU with the surface area heuristic, stored depth first and walked without a stack. Object tests were 70–90% of GPU time; the BVH cut time per sample by 28–54% on five scenes (`dreamspace` 109 to 78 ms on an Iris Xe) with no clear change on the two smallest, and identical pictures. A first version that kept a stack of nodes per pixel made small scenes twice as slow, because big per-pixel arrays are expensive on an integrated GPU.
+- Next: retest "any hit" shadow rays now that there's a BVH, then finish the learning note.
 - Lower resolution while the camera moves comes sooner if chunk 4 makes the laptop too slow to work on.
 
 *Chunk 4: real materials*
@@ -170,11 +171,7 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 ## Act 2: large scenes that load in seconds
 
 1. **Triangle meshes** in storage buffers, alongside the spheres.
-2. **A BVH:**
-   - build it on the CPU first, with the surface area heuristic (SAH);
-   - flatten it into an array;
-   - traverse it in WGSL with a small stack;
-   - measure rays per second before and after.
+2. **A BVH over triangles.** One over spheres and boxes already exists (C1's optimization pass): built on the CPU with the surface area heuristic, stored depth first, walked without a stack. Triangles need it to scale to millions of objects: a faster builder (binned SAH), a two-level tree (one per model, plus one over the models), and measuring rays per second before and after.
 3. **An asset pipeline:** source models live in `assets-src/` (gitignored) and are converted offline into a compact binary format the browser can upload with little parsing. Third-party assets are credited, with their licenses, in the README.
 4. **Image textures** for color, roughness and surface bumps (normal maps), so the dreamspace gets real tile, carpet and concrete.
 5. **Fast loading:**

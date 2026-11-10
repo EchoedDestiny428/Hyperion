@@ -23,6 +23,8 @@ interface SceneBuffers {
   materials: GPUBuffer;
   boxes: GPUBuffer;
   lights: GPUBuffer;
+  bvhNodes: GPUBuffer;
+  bvhItems: GPUBuffer;
 }
 
 // The running total of samples, one vec4f (16 bytes) per pixel.
@@ -87,6 +89,8 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
           { binding: 4, resource: { buffer: accumulation.buffer } },
           { binding: 5, resource: { buffer: sceneBuffers.boxes } },
           { binding: 6, resource: { buffer: sceneBuffers.lights } },
+          { binding: 7, resource: { buffer: sceneBuffers.bvhNodes } },
+          { binding: 8, resource: { buffer: sceneBuffers.bvhItems } },
         ],
       });
 
@@ -119,12 +123,15 @@ function uploadScene(device: GPUDevice, scene: Scene, previous: SceneBuffers | n
     materials: storage('materials', packed.materials),
     boxes: storage('boxes', packed.boxes),
     lights: storage('lights', packed.lights),
+    bvhNodes: storage('BVH nodes', packed.bvhNodes),
+    bvhItems: storage('BVH items', packed.bvhItems),
   };
   // Frames already submitted still finish with the old buffers: destroy()
   // only frees their memory once the GPU is done with them.
   // https://www.w3.org/TR/webgpu/#dom-gpubuffer-destroy
   if (previous) {
-    for (const buffer of [previous.info, previous.spheres, previous.materials, previous.boxes, previous.lights]) {
+    const { info, spheres, materials, boxes, lights, bvhNodes, bvhItems } = previous;
+    for (const buffer of [info, spheres, materials, boxes, lights, bvhNodes, bvhItems]) {
       buffer.destroy();
     }
   }

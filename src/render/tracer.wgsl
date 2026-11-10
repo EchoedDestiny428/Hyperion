@@ -224,8 +224,36 @@ fn intersectGround(ray: Ray) -> f32 {
 // run of the shader has its own copy of a `private` variable.
 var<private> rayCount: u32;
 
-// Finds the closest thing the ray hits, by testing every object. Fine for a
-// few dozen objects; a real scene needs an acceleration structure (a BVH, Act 2).
+// ---- BVH -------------------------------------------------------------------
+// A tree of boxes around the objects (built by scene/bvh.ts), so a ray skips
+// every object inside a box it misses. Must match packBvh in bvh.ts
+// (bvh.test.ts checks the constants).
+struct BvhNode {
+  boundsMin: vec3f,
+  first: u32, // leaf: first entry in bvhItems; inner node: the node after its subtree, for a miss
+  boundsMax: vec3f,
+  count: u32, // objects in a leaf; 0 for an inner node
+}
+
+const BOX_ITEM_BIT = 2147483648u; // 0x80000000: set on bvhItems entries that are boxes
+
+@group(0) @binding(7) var<storage, read> bvhNodes: array<BvhNode>;
+@group(0) @binding(8) var<storage, read> bvhItems: array<u32>; // an index into spheres, or into boxes with BOX_ITEM_BIT set
+
+// Where a ray enters a node's box (0 if it starts inside), or NO_HIT if it
+// misses it or only reaches it at `limit` or beyond. The same slab test as
+// intersectBox, without the turning: these boxes are lined up with the world.
+// `inverse` is 1 ÷ the ray's direction, worked out once per ray.
+fn nodeEntry(origin: vec3f, inverse: vec3f, node: BvhNode, limit: f32) -> f32 {
+  let a = (node.boundsMin - origin) * inverse;
+  let b = (node.boundsMax - origin) * inverse;
+  let enter = max(max(max(min(a.x, b.x), min(a.y, b.y)), min(a.z, b.z)), 0.0);
+  let exit = min(min(min(max(a.x, b.x), max(a.y, b.y)), max(a.z, b.z)), limit);
+  return select(NO_HIT, enter, enter <= exit);
+}
+
+// Finds the closest thing the ray hits. The ground plane is endless, so it's
+// tested on its own; everything else is found by walking the BVH.
 fn intersectScene(ray: Ray) -> Hit {
   rayCount++;
   var hit: Hit;
@@ -237,18 +265,45 @@ fn intersectScene(ray: Ray) -> Hit {
   // once at the end, since a closer object may yet replace it.
   var closestSphere = NO_OBJECT;
   var closestBox = NO_OBJECT;
-  for (var i = 0u; i < scene.sphereCount; i++) {
-    let t = intersectSphere(ray, spheres[i]);
-    if (t < hit.t) {
-      hit.t = t;
-      closestSphere = i;
-    }
-  }
-  for (var i = 0u; i < scene.boxCount; i++) {
-    let t = intersectBox(ray, boxes[i]);
-    if (t < hit.t) {
-      hit.t = t;
-      closestBox = i;
+
+  if (scene.sphereCount + scene.boxCount > 0u) {
+    // WGSL doesn't promise that dividing by zero gives infinity; see rayInBoxSpace.
+    let inverse = 1.0 / select(ray.dir, vec3f(1e-20), abs(ray.dir) < vec3f(1e-20));
+    // The walk, with the nodes stored depth first (depthFirst in bvh.ts): if
+    // the ray reaches a node's box before the closest hit so far, go on to the
+    // next node, which is its first child, or test its objects if it's a leaf.
+    // If not, skip its whole subtree by following its link. No list of nodes
+    // still to visit is needed.
+    let nodeCount = arrayLength(&bvhNodes);
+    var node = 0u;
+    while (node < nodeCount) {
+      let current = bvhNodes[node];
+      let reached = nodeEntry(ray.origin, inverse, current, hit.t) < hit.t;
+      if (reached && current.count > 0u) {
+        // A leaf: test its objects.
+        for (var k = current.first; k < current.first + current.count; k++) {
+          let item = bvhItems[k];
+          let index = item & ~BOX_ITEM_BIT;
+          if ((item & BOX_ITEM_BIT) != 0u) {
+            let t = intersectBox(ray, boxes[index]);
+            if (t < hit.t) {
+              hit.t = t;
+              closestBox = index;
+              closestSphere = NO_OBJECT;
+            }
+          } else {
+            let t = intersectSphere(ray, spheres[index]);
+            if (t < hit.t) {
+              hit.t = t;
+              closestSphere = index;
+              closestBox = NO_OBJECT;
+            }
+          }
+        }
+      }
+      // A leaf's next node, or an inner node's first child, comes right after
+      // it; a missed inner node's link points past its subtree.
+      node = select(node + 1u, current.first, !reached && current.count == 0u);
     }
   }
 

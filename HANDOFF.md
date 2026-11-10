@@ -1,6 +1,6 @@
 # Handoff notes
 
-For whoever picks this up next, human or agent. Updated 2026-11-01 at the end of a working session. Public file: no personal details here.
+For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of a working session. Public file: no personal details here.
 
 ## Where things stand
 
@@ -19,8 +19,10 @@ For whoever picks this up next, human or agent. Updated 2026-11-01 at the end of
 
 Photo quality came before more optimization (decided 2026-11-01), and the room now exists, so what's slow can be measured. In order, each needing approval first:
 
-1. Finish the learning note (step 15). Everything else on C1's done list is met.
-2. The rest of the optimization pass: skip box faces pointing away, with a way to measure noise, then a BVH. `dreamspace` is the scene to measure on.
+1. Retest "any hit" shadow rays now that there's a BVH: a shadow ray could stop walking the tree at its first blocker.
+2. Finish the learning note (step 15). Everything else on C1's done list is met.
+
+Done since the last update: `npm run noise` (noise against a clean reference, exactly repeatable), shadow rays aimed only at visible box faces, and a BVH over spheres and boxes, walked without a stack. See "Optimization pass" in `docs/PLAN.md` and sections 34–38 of the learning note.
 
 Then C2. The fly camera's pointer lock, walking and collisions wait for C2 too.
 
@@ -100,6 +102,8 @@ The room's shader changes (patterns, tiles, haze) cost nothing measurable elsewh
 
 Against a reference (Bitterli's Cornell box, Tungsten's HDR render, 12 patches, ours ÷ theirs): as shipped, mean ratios are 0.98 red, 1.01 green and 1.06 blue. The extra blue and green come from the 4% shiny coat on non-metals, which the reference doesn't have. With that coat removed in a scratch build, plus 64 bounces and no firefly cap, every patch is within 1.6%, and the mean is 1.004. The 8-bounce limit and the cap together cost at most about 0.5%. Before the shadow-ray fix, the same scratch build's mean was 0.93, and the ceiling's was 0.75.
 
+Laptop (Intel Iris Xe, plugged in), path tracer, p50 per sample. Visible-face light sampling: 30% less noise in `cornell-box` and 14% in `neon-night` at 16 samples, 6–8% more time. The BVH, against the build before it, 3 rounds: `neon-night` 14.7 to 6.7 ms (−54%), `material-test` 14.2 to 7.9 (−45%), `aliasing-test` 4.9 to 2.8 (−42%), `shadow-heights` 3.7 to 2.7 (−29%), `dreamspace` 109 to 78 (−28%); `ball-test-1` and `cornell-box` no clear change. Pictures byte-identical. A first BVH walk with a 32-entry stack per pixel made small scenes twice as slow (`ball-test-1` 3.7 to 8.3 ms), so don't bring the stack back without measuring.
+
 Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
 
 ## Where things live
@@ -110,7 +114,8 @@ Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no g
 - `src/render/accumulation.ts`: when to restart, pacing, sample limits.
 - `src/camera/orbit.ts`, `src/camera/fly.ts`: the two cameras.
 - `src/gpu/timer.ts`: timestamp-query GPU timing.
-- `scripts/benchmark.ts`: the benchmark; `benchmark-report.ts` is its tested, pure half.
+- `scripts/benchmark.ts`: the benchmark; `benchmark-report.ts` is its tested, pure half. `scripts/noise.ts` measures noise, with `image.ts` reading screenshots; both use `browser.ts` to drive the browser.
+- `src/scene/bvh.ts`: building and packing the BVH; `bvh.test.ts` checks it against testing every object.
 
 ## Things worth knowing
 
