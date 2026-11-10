@@ -258,6 +258,14 @@ fn intersectScene(ray: Ray) -> Hit {
     hit.normal = boxNormal(ray, box, hit.t);
     hit.material = box.material;
     hit.lightDensity = box.lightDensity;
+    if (box.lightDensity > 0.0) {
+      // Shadow rays from where this ray started only aim at the faces visible
+      // from there (sampleLight), so the same chance is spread over less area.
+      // MIS needs this to match, or found light would be counted wrongly.
+      let visible = visibleFaceAreas(box.halfSize, pointInBoxSpace(box, ray.origin));
+      let seen = visible.x + visible.y + visible.z;
+      hit.lightDensity = select(0.0, box.lightDensity * boxSurfaceArea(box.halfSize) / seen, seen > 0.0);
+    }
   } else if (closestSphere != NO_OBJECT) {
     let sphere = spheres[closestSphere];
     hit.normal = normalize(hit.position - sphere.center);
@@ -396,9 +404,31 @@ struct LightSample {
   probability: f32, // of having picked this light
 }
 
+// A point in a box's own coordinates, where it's centered at the origin and
+// lined up with the axes.
+fn pointInBoxSpace(box: Box, point: vec3f) -> vec3f {
+  return (point - box.center) * box.rotation;
+}
+
+fn boxSurfaceArea(h: vec3f) -> f32 {
+  return 8.0 * (h.x * h.y + h.y * h.z + h.x * h.z);
+}
+
+// The area of the box faces a point can see, for the pair of faces across
+// each axis. A face is visible only from beyond its own plane, so of each pair
+// the point sees at most the one on its side, and none if it's level with the
+// box along that axis. `local` is the point in the box's own coordinates.
+fn visibleFaceAreas(h: vec3f, local: vec3f) -> vec3f {
+  let faceAreas = vec3f(h.y * h.z, h.x * h.z, h.x * h.y) * 4.0;
+  return select(vec3f(0.0), faceAreas, abs(local) > h);
+}
+
 // Picks a light in proportion to the light it gives off (findLights() in
-// scene.ts sets the odds), then a point spread evenly over its surface.
-fn sampleLight() -> LightSample {
+// scene.ts sets the odds), then a point spread evenly over the part of it that
+// `litPoint` can see. For a box, that means the faces turned toward it: aiming at
+// the others would waste the shadow ray, since a face can't light what's
+// behind it.
+fn sampleLight(litPoint: vec3f) -> LightSample {
   let u = random();
   var picked = lights[scene.lightCount - 1u];
   for (var i = 0u; i < scene.lightCount; i++) {
@@ -417,26 +447,30 @@ fn sampleLight() -> LightSample {
     s.area = 4.0 * PI * sphere.radius * sphere.radius;
     s.emission = materials[sphere.material].emission;
   } else {
-    // A box: pick one of its six faces in proportion to its area, then a
-    // point on that face, in the box's own coordinates.
+    // A box: pick one of the faces `litPoint` can see, in proportion to its area,
+    // then a point on that face, in the box's own coordinates.
     let box = boxes[picked.index];
     let h = box.halfSize;
-    let faceAreas = vec3f(h.y * h.z, h.x * h.z, h.x * h.y) * 4.0; // the faces across x, y and z
-    s.area = 2.0 * (faceAreas.x + faceAreas.y + faceAreas.z);
-    let side = select(-1.0, 1.0, random() < 0.5);
+    let seenFrom = pointInBoxSpace(box, litPoint);
+    let visible = visibleFaceAreas(h, seenFrom);
+    s.area = visible.x + visible.y + visible.z;
+    if (s.area <= 0.0) {
+      return s; // `litPoint` is inside the box, where no face can light it
+    }
+    let side = sign(seenFrom); // which face of each pair is turned toward `litPoint`
     let along = vec2f(random(), random()) * 2.0 - 1.0; // -1..1 across the face
-    let pick = random() * (faceAreas.x + faceAreas.y + faceAreas.z);
+    let pick = random() * s.area;
     var local: vec3f;
     var n: vec3f;
-    if (pick < faceAreas.x) {
-      local = vec3f(side * h.x, along.x * h.y, along.y * h.z);
-      n = vec3f(side, 0.0, 0.0);
-    } else if (pick < faceAreas.x + faceAreas.y) {
-      local = vec3f(along.x * h.x, side * h.y, along.y * h.z);
-      n = vec3f(0.0, side, 0.0);
+    if (pick < visible.x) {
+      local = vec3f(side.x * h.x, along.x * h.y, along.y * h.z);
+      n = vec3f(side.x, 0.0, 0.0);
+    } else if (pick < visible.x + visible.y) {
+      local = vec3f(along.x * h.x, side.y * h.y, along.y * h.z);
+      n = vec3f(0.0, side.y, 0.0);
     } else {
-      local = vec3f(along.x * h.x, along.y * h.y, side * h.z);
-      n = vec3f(0.0, 0.0, side);
+      local = vec3f(along.x * h.x, along.y * h.y, side.z * h.z);
+      n = vec3f(0.0, 0.0, side.z);
     }
     s.position = box.center + box.rotation * local;
     s.normal = box.rotation * n;
@@ -454,11 +488,14 @@ fn lightFromObjects(surface: Surface, position: vec3f) -> vec3f {
   if (scene.lightCount == 0u) {
     return vec3f(0.0);
   }
-  let s = sampleLight();
   // Measured from where the ray really starts. Measured from the surface, the
   // offset shortens the true trip to a light it faces, so closer than about a
   // meter, a ray reached the light before it stopped and was "blocked" by it.
   let start = position + surface.normal * EPSILON;
+  let s = sampleLight(start);
+  if (s.area <= 0.0) {
+    return vec3f(0.0); // inside a glowing box
+  }
   let toLight = s.position - start;
   let distanceSquared = dot(toLight, toLight);
   let distance = sqrt(distanceSquared);

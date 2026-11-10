@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
-    "benchmark": "npm run build && node scripts/benchmark.ts"
+    "benchmark": "npm run build && node scripts/benchmark.ts",
+    "noise": "npm run build && node scripts/noise.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

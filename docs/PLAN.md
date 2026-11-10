@@ -87,7 +87,9 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 - Tried and dropped: "any hit" shadow rays that stop at the first blocker. No gain in these open scenes, where most shadow rays are never blocked. Retest once there's a BVH.
 - Tried and dropped: separate shaders per renderer and view. Even a shader holding only the path tracer showed no clear gain.
 - Paused on 2026-11-01: photo quality comes first, because chunk 4's materials and the dreamspace room will change what's slow.
-- Next, now that the room exists: light sampling that skips box faces pointing away, with a way to measure noise, since the benchmark only measures time; then a BVH over spheres and boxes, pulled forward from Act 2.
+- Done: `npm run noise`, which measures noise against a clean reference picture, since the benchmark only measures time. It's exactly repeatable: a build compared with itself gives 0.
+- Done: light sampling aims only at box faces the lit point can see. At 16 samples, 30% less noise in the Cornell box (as clean as 2× the samples) and 14% in `neon-night`, converging to the same pictures; no clear change in the dreamspace, whose noise comes mostly from elsewhere. It costs 6–8% more time per sample, because shadow rays aimed at faces pointing away used to be dropped before being traced. Per second of work that's about 1.9× better in the Cornell box, 1.3× in `neon-night` and about even in the dreamspace.
+- Next: a BVH over spheres and boxes, pulled forward from Act 2.
 - Lower resolution while the camera moves comes sooner if chunk 4 makes the laptop too slow to work on.
 
 *Chunk 4: real materials*

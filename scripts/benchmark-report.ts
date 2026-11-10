@@ -11,6 +11,7 @@ export interface HudReading {
   gpu: string;
   canvas: string; // such as "1280×800"
   samples: number; // in the image so far
+  sampleLimit: number; // where it stops
   timing: Timing | null; // null until the first measurements arrive
 }
 
@@ -23,12 +24,12 @@ export function readHud(text: string): HudReading | null {
 
   const gpu = value('GPU     '); // the extra spaces tell it apart from "GPU time"
   const canvas = value('Canvas');
-  const samples = value('Samples')?.match(/^\d+/)?.[0];
-  if (gpu === undefined || canvas === undefined || samples === undefined) return null;
+  const samples = value('Samples')?.match(/^(\d+) \/ (\d+)/);
+  if (gpu === undefined || canvas === undefined || !samples) return null;
 
   const time = value('GPU time')?.match(/p50 ([\d.]+) · p95 ([\d.]+) · p99 ([\d.]+) ms/);
   const timing = time ? { p50: Number(time[1]), p95: Number(time[2]), p99: Number(time[3]) } : null;
-  return { gpu, canvas, samples: Number(samples), timing };
+  return { gpu, canvas, samples: Number(samples[1]), sampleLimit: Number(samples[2]), timing };
 }
 
 // One scene and renderer: the p50 of each round. `before` stays empty unless

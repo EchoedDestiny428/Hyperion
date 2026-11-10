@@ -17,6 +17,7 @@ test('reads the GPU, canvas, sample count and timing from the HUD', () => {
     gpu: 'intel · gen-12lp',
     canvas: '1280×800',
     samples: 512,
+    sampleLimit: 1024,
     timing: { p50: 3.44, p95: 3.63, p99: 3.7 },
   });
 });

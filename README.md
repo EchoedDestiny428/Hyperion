@@ -25,6 +25,7 @@ npm run dev        # then open the printed http://localhost:5173 URL
 | `npm run build` | Type-check, then produce an optimized build in `dist/` |
 | `npm run preview` | Serve `dist/` locally |
 | `npm run benchmark` | Measure GPU time for every scene and renderer in a headless browser; see `scripts/benchmark.ts` for options |
+| `npm run noise` | Measure how noisy each scene is at a few sample counts, against a clean reference picture; see `scripts/noise.ts` |
 
 ## Controls
 
