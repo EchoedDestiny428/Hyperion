@@ -92,6 +92,12 @@ body {
   font: inherit;
 }
 
+#settings .slider input {
+  display: block;
+  width: 100%;
+  margin: 2px 0 4px;
+}
+
 #settings .heading {
   margin: 8px 0 0;
   font-weight: bold;

@@ -4,25 +4,27 @@ For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of
 
 ## Where things stand
 
-- **Branch:** `c2-denoising`, new, branched from `main`. C1 is finished and merged into `main` (2026-11-10); `c1-path-tracer` stays on GitHub as a record.
-- **C1 chunks 1–3 are done** (see `docs/PLAN.md`):
+- **Branch:** `c2-denoising`, branched from `main`. C1 is finished and merged into `main` (2026-11-10); `c1-path-tracer` stays on GitHub as a record.
+- **C2 so far:** the spatial denoiser for still images, the Denoise slider in the Renderer panel (0 = off, up to 5 passes, default 2). See "Done so far" under C2 in `docs/PLAN.md`, and `docs/learn/C2.md`.
+- **C1 is done** (see `docs/PLAN.md`):
   - chunk 1: GPU random numbers, progressive accumulation, anti-aliasing;
   - chunk 2: path tracer (bounce light, sky light, soft sun shadows, Russian roulette), the Renderer menu (Whitted kept for comparison), GPU timing;
   - chunk 3: rotated boxes, glowing materials with light sampling, per-scene sun and sky, the `neon-night` scene, and the Cornell box, built after chunk 4.
   - optimization pass paused: the benchmark, the first speedup and the desktop GPU test are in; see below.
   - chunk 4 done: one material set by numbers instead of kinds, Fresnel, GGX rough surfaces, multiple importance sampling (MIS), glass (clear and frosted), wet asphalt on `neon-night`, the `material-test` scene, procedural tiles and the `dreamspace` room.
   - also: fly camera (WASD), arrow-key orbit, full 360° turning, scene sliders, the `shadow-heights` and `aliasing-test` scenes.
-- **Checks:** `npm run typecheck`, `npm test` (70 passing) and `npm run build` all pass.
-- **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 33. Keep adding a section per change, in the same plain style.
+- **Checks:** `npm run typecheck`, `npm test` (95 passing) and `npm run build` all pass.
+- **Learning notes:** `docs/learn/C0.md` and `docs/learn/C1.md` are finished; `docs/learn/C2.md` covers the denoiser (sections 1–9). Keep adding a section per change, in the same plain style.
 
-## Next: start C2
+## Next in C2
 
-C1 is done. In order, each needing approval first:
+Each needing approval first:
 
-1. The edge-aware spatial filter (C2 step 9) first, for still images: a G-buffer (normal, distance, base color), lighting divided by base color before filtering and multiplied back after, and a few à-trous passes. Measure with `npm run noise` how much cleaner it gets and what it smears (contact shadows, highlights, pool reflections). Learning note: `docs/learn/C2.md`.
-2. Optional: retest "any hit" shadow rays now that there's a BVH, since a shadow ray could stop walking the tree at its first blocker.
+1. The temporal steps (C2 steps 2–5 in `docs/PLAN.md`): two history buffers, reprojection, rejecting history that doesn't match, fading history. The G-buffer they need is already in the per-pixel records.
+2. Optional, for the denoiser: glossy reflections and glass, which it still smooths as part of the surface they're seen on (steps 6 and 7); and fireflies, which it spreads into blobs.
+3. Optional: retest "any hit" shadow rays now that there's a BVH, since a shadow ray could stop walking the tree at its first blocker.
 
-Done since the last update: `npm run noise` (noise against a clean reference, exactly repeatable), shadow rays aimed only at visible box faces, and a BVH over spheres and boxes, walked without a stack. See "Optimization pass" in `docs/PLAN.md` and sections 34–38 of the learning note, which now also ends with how it all fits together (39) and what C1 doesn't do (40).
+Done since the last update: the denoiser. The first version made the checkerboard scenes *worse*; measuring block by block found why (section 8 of the C2 note). Keep measuring every filter change with `npm run noise -- --denoise 0,1,2,3,4,5 --save <folder>` and look at the pictures, since a smoother picture can be further from the truth.
 
 The fly camera's pointer lock, walking and collisions come later in C2, once the image stays clean while moving.
 
@@ -104,12 +106,15 @@ Against a reference (Bitterli's Cornell box, Tungsten's HDR render, 12 patches, 
 
 Laptop (Intel Iris Xe, plugged in), path tracer, p50 per sample. Visible-face light sampling: 30% less noise in `cornell-box` and 14% in `neon-night` at 16 samples, 6–8% more time. The BVH, against the build before it, 3 rounds: `neon-night` 14.7 to 6.7 ms (−54%), `material-test` 14.2 to 7.9 (−45%), `aliasing-test` 4.9 to 2.8 (−42%), `shadow-heights` 3.7 to 2.7 (−29%), `dreamspace` 109 to 78 (−28%); `ball-test-1` and `cornell-box` no clear change. Pictures byte-identical. A first BVH walk with a 32-entry stack per pixel made small scenes twice as slow (`ball-test-1` 3.7 to 8.3 ms), so don't bring the stack back without measuring.
 
+Denoiser (2026-11-10), `npm run noise`, 640×400, error against an undenoised 1,024-sample reference, 2 passes: `dreamspace` −69% / −72% / −65% at 4 / 16 / 64 samples, `cornell-box` −74% / −73% / −63%, `material-test` −57% / −49% / −31%, the open-air scenes −3% to −39%. The full table is in section 8 of `docs/learn/C2.md`. At slider 0 the picture is byte-identical to before. Cost on the laptop (Iris Xe, battery), `dreamspace`, path, 1280×800: the bigger per-pixel records cost nothing measurable (−0.3%, not clear). The first denoiser added 49 ms per frame at 2 passes (117 to 166 ms) and 90 ms at 5. Now it filters only when the samples grow by a tenth, so a typical refining frame costs the same as without it. A filter (every frame, while the view changes) costs about 10 ms per pass on `shadow-heights`, down from 14, after packing a 16-byte guide and cutting the per-neighbor math. What's left is about half arithmetic, half memory reads (section 9 of the C2 note).
+
 Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
 
 ## Where things live
 
 - `src/render/tracer.wgsl`: both renderers (`traceWhitted`, `tracePath`), materials (`surfaceAt`, `scatterToward`, `sampleBounce`, `sampleGlass`), patterns (`flatten`, `tileAt`, `surfaceColor`), debug views, light sampling, accumulation, tone mapping.
-- `src/render/tracer-pass.ts`: pipeline, buffers, bind group (binding numbers match the shader).
+- `src/render/tracer-pass.ts`: pipeline, buffers, bind group (binding numbers match the shader). It hands the per-pixel records (`PixelRecord`: light, color, normal and distance) to the denoiser.
+- `src/render/denoise.wgsl` and `denoise-pass.ts`: the denoiser (prepare, à-trous passes, show); `denoise-schedule.ts` decides when it filters again. `gpu-layout.ts` holds the sizes both sides share; `denoise.test.ts` checks the shader's copies of `Frame`, `PixelRecord` and the tone-mapping functions still match `tracer.wgsl`.
 - `src/scene/scene.ts`: the scene format and `packScene` byte layouts; `src/scene/layouts/` holds the scenes, `registry.ts` lists them.
 - `src/render/accumulation.ts`: when to restart, pacing, sample limits.
 - `src/camera/orbit.ts`, `src/camera/fly.ts`: the two cameras.
@@ -126,6 +131,8 @@ Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no g
 - **Same image, same bytes.** Random numbers come from the pixel and sample number, so at a fixed sample count identical code gives a byte-identical picture, as long as each pixel asks for the same random numbers in the same order. That makes before and after screenshots a strong check on any change that shouldn't alter the image.
 - **Bounce rays are the check on shadow rays.** Both find the same light, so a build with no shadow rays must give the same picture as a build with only them, from any viewpoint. A difference means a bug. Look from inside the scene too, since the bug in section 33 of the learning note was invisible from the usual cameras. `lightFromObjects` must keep aiming from the ray's real start, and shouldn't go back to `blocked`.
 - **The room's sun depends on `sunDirection()`.** `dreamspace` is laid out so the sun lands on the deck, not the water, which blocks shadow rays. Changing the sun's direction, or ticking "Sun moves", changes that.
+- **`firstSurface.w = NO_HIT` means "don't denoise",** not only "sky": glowing surfaces get it too. Perfect mirrors (metallic 1, polished) are looked through: the record holds what they show, as a mirror image.
+- **The benchmark pins the Denoise slider** (`--denoise`, default 0) in both builds, so its times stay the tracer's own unless asked. Builds from before the slider simply don't denoise.
 - **Only the listed sample counts work when driving the page.** The Samples menu offers 1, 4, 16, 64, 256 and 1,024. Setting any other value from a script leaves a very noisy image, which looks like a rendering bug.
 
 ## Conventions

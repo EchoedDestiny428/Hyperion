@@ -2,7 +2,7 @@
 
 A WebGPU tech demo: real-time ray tracing in the browser, and later, large scenes that load in seconds.
 
-**Status:** early development. Milestone **C1** is done: a path tracer with real bounce light, glTF-style materials (metal, plastic, glass, glowing surfaces), and a BVH, refining to a clean still image in the browser. **C2**, keeping the image clean while the camera moves, is next. Plain-language explanations of how each part works are in [`docs/learn/`](docs/learn/).
+**Status:** early development. Milestone **C1** is done: a path tracer with real bounce light, glTF-style materials (metal, plastic, glass, glowing surfaces), and a BVH, refining to a clean still image in the browser. **C2**, keeping the image clean while the camera moves, is in progress: so far a denoiser that smooths away leftover grain in still images. Plain-language explanations of how each part works are in [`docs/learn/`](docs/learn/).
 
 ## Run it
 
@@ -25,7 +25,7 @@ npm run dev        # then open the printed http://localhost:5173 URL
 | `npm run build` | Type-check, then produce an optimized build in `dist/` |
 | `npm run preview` | Serve `dist/` locally |
 | `npm run benchmark` | Measure GPU time for every scene and renderer in a headless browser; see `scripts/benchmark.ts` for options |
-| `npm run noise` | Measure how noisy each scene is at a few sample counts, against a clean reference picture; see `scripts/noise.ts` |
+| `npm run noise` | Measure how noisy each scene is at a few sample counts and Denoise levels, against a clean reference picture; see `scripts/noise.ts` |
 
 ## Controls
 
@@ -44,7 +44,7 @@ Pick a scene layout from the menu in the bottom-left corner, or open one directl
 
 Some scenes have sliders under the Scene menu; `shadow-heights` lifts a ball to show how shadows soften with height. `neon-night` is lit by a glowing neon sign, with wet asphalt, puddles and a field of mirror balls. `material-test` compares metal, plastic and glass at every roughness. `cornell-box` is the classic test for bounce light; switch the Renderer to Whitted to see the same room without it. `dreamspace` is a tiled hall with a pool, lit by ceiling panels and sunlight through tall windows; it starts in the Fly camera, and takes the longest to refine.
 
-The **Renderer** panel in the top-right corner switches between the C0 Whitted ray tracer and the C1 path tracer, picks the camera, and shows debug views such as normals, shadows and rays per pixel. Its anti-aliasing controls set how many samples each pixel averages, and can add them one at a time; the `aliasing-test` scene shows the difference best. The HUD in the top-left shows how long the GPU spends per frame, where the browser can measure it.
+The **Renderer** panel in the top-right corner switches between the C0 Whitted ray tracer and the C1 path tracer, picks the camera, and shows debug views such as normals, shadows and rays per pixel. Its Denoise slider sets how hard the path tracer's grain is smoothed away, from 0 (off) to 5. Its anti-aliasing controls set how many samples each pixel averages, and can add them one at a time; the `aliasing-test` scene shows the difference best. The HUD in the top-left shows how long the GPU spends per frame, where the browser can measure it.
 
 ## License
 

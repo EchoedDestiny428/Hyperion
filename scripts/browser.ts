@@ -178,6 +178,20 @@ export async function pick(page: Page, menu: string, value: string): Promise<voi
   })()`);
 }
 
+// Sets one of the Renderer panel's sliders, by the text its label starts
+// with. Returns false if there's no such slider, as in a build from before it.
+export async function slide(page: Page, slider: string, value: number): Promise<boolean> {
+  const found = await page.evaluate(`(() => {
+    const label = [...document.querySelectorAll('#settings label')].find((l) => l.textContent.startsWith(${JSON.stringify(slider)}));
+    const input = label?.querySelector('input[type=range]');
+    if (!input) return false;
+    input.value = ${JSON.stringify(String(value))};
+    input.dispatchEvent(new Event('input'));
+    return true;
+  })()`);
+  return found === true;
+}
+
 export async function hud(page: Page): Promise<HudReading | null> {
   return readHud(String(await page.evaluate(`document.getElementById('hud').textContent`)));
 }

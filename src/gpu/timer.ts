@@ -1,6 +1,6 @@
-// Measures how long the GPU spends on the render pass, using timestamp
-// queries: the GPU writes its own clock into a query set when the pass starts
-// and ends, and we copy the two values back to the CPU.
+// Measures how long the GPU spends on a frame's passes, using timestamp
+// queries: the GPU writes its own clock into a query set when the first pass starts
+// and the last ends, and we copy the two values back to the CPU.
 // https://www.w3.org/TR/webgpu/#timestamp
 //
 // This is the GPU's own time. It's not the time between frames, which the
@@ -76,5 +76,21 @@ export function createGpuTimer(device: GPUDevice): GpuTimer | null {
         },
       );
     },
+  };
+}
+
+// One measurement over a run of passes: the first pass writes the start time
+// and the last the end, so the time covers everything in between. A half
+// with nothing to write is undefined, since WebGPU rejects timestampWrites
+// that write neither (as for a frame that isn't timed).
+export function firstAndLast(writes: GPURenderPassTimestampWrites | undefined): {
+  first: GPURenderPassTimestampWrites | undefined;
+  last: GPURenderPassTimestampWrites | undefined;
+} {
+  const begin = writes?.beginningOfPassWriteIndex;
+  const end = writes?.endOfPassWriteIndex;
+  return {
+    first: writes && begin !== undefined ? { querySet: writes.querySet, beginningOfPassWriteIndex: begin } : undefined,
+    last: writes && end !== undefined ? { querySet: writes.querySet, endOfPassWriteIndex: end } : undefined,
   };
 }

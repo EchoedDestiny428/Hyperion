@@ -37,6 +37,7 @@ export interface RenderSettings {
   sunMoves: boolean; // on = the sun circles, so the image can't refine
   sampleLimit: number; // anti-aliasing: one of SAMPLE_LIMITS
   pace: Pace;
+  denoise: number; // filter passes, 0 (off) to MAX_DENOISE_LEVEL
 }
 
 export function defaultSettings(): RenderSettings {
@@ -49,5 +50,25 @@ export function defaultSettings(): RenderSettings {
     sunMoves: false,
     sampleLimit: MAX_SAMPLES,
     pace: 'full',
+    // Measured on 2026-11-10 (docs/learn/C2.md, section 8): 2 passes made
+    // every scene cleaner at 4, 16 and 64 samples, and smears the least.
+    denoise: 2,
   };
+}
+
+// The Denoise slider: how many filter passes run (denoise.wgsl). Each pass
+// spreads its 5×5 grid twice as wide as the last: 1, 2, 4, 8, 16 pixels.
+export const MAX_DENOISE_LEVEL = 5;
+
+// The passes the image actually gets. Only the path tracer's lit image is
+// denoised: the Whitted renderer has no noise to remove, and smoothing a
+// debug view would hide what it's there to show.
+export function denoiseLevel(s: RenderSettings): number {
+  return s.renderer === 'path' && s.view === 'final' ? s.denoise : 0;
+}
+
+// How far from a pixel, in pixels, `level` passes can gather light: each
+// pass reaches 2 grid steps out, so 2·(1 + 2 + … + 2^(level-1)).
+export function denoiseReach(level: number): number {
+  return 2 * (2 ** level - 1);
 }

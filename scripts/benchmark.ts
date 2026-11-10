@@ -12,16 +12,19 @@
 // differed by up to 13% on battery (checked on 2026-10-30), which would hide
 // most optimizations. Alternating exposes both builds to the same conditions.
 //
-// Options: --rounds <n> (default 5), --scene <name>, --renderer <name>.
+// Options: --rounds <n> (default 5), --scene <name>, --renderer <name>,
+// --denoise <level> (the Denoise slider in both builds, default 0, so the
+// times are the tracer's own; a build without the slider never denoises, so
+// --denoise 2 --against such a build measures what denoising costs).
 // Set BROWSER_PATH to use a browser other than Edge or Chrome.
 // Time is only half the story for changes meant to reduce noise; noise.ts
 // measures the other half.
 
 import { parseArgs } from 'node:util';
-import { RENDERER_NAMES } from '../src/render/settings.ts';
+import { MAX_DENOISE_LEVEL, RENDERER_NAMES } from '../src/render/settings.ts';
 import { SCENES } from '../src/scene/registry.ts';
 import { type HudReading, type Result, formatReport } from './benchmark-report.ts';
-import { type Page, openScene, pick, powerState, serve, sleep, startBrowser, waitForHud } from './browser.ts';
+import { type Page, openScene, pick, powerState, serve, sleep, slide, startBrowser, waitForHud } from './browser.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 800;
@@ -30,12 +33,13 @@ const HEIGHT = 800;
 const SAMPLES_TO_MEASURE = 512;
 const HUD_REFRESH_MS = 300; // a little longer than the HUD's update interval
 
-async function measure(page: Page, url: string, scene: string, renderer: string): Promise<HudReading> {
+async function measure(page: Page, url: string, scene: string, renderer: string, denoise: number): Promise<HudReading> {
   const label = `${scene}, ${renderer}`;
   // A fresh page each time, so timings from the last measurement can't mix in.
   await openScene(page, url, scene);
   await waitForHud(page, label, (reading) => reading.samples > 0);
   await pick(page, 'Renderer', renderer);
+  await slide(page, 'Denoise', denoise);
   await sleep(HUD_REFRESH_MS);
 
   const reading = await waitForHud(page, label, (r) => r.samples >= SAMPLES_TO_MEASURE && r.timing !== null);
@@ -50,9 +54,14 @@ async function main(): Promise<void> {
       scene: { type: 'string' },
       renderer: { type: 'string' },
       against: { type: 'string' },
+      denoise: { type: 'string', default: '0' },
     },
   });
   const rounds = Number(values.rounds);
+  const denoise = Number(values.denoise);
+  if (!(Number.isInteger(denoise) && denoise >= 0 && denoise <= MAX_DENOISE_LEVEL)) {
+    throw new Error(`--denoise ${values.denoise} isn't a Denoise slider level: 0 to ${MAX_DENOISE_LEVEL}.`);
+  }
   const scenes = SCENES.map((scene) => scene.name).filter((name) => !values.scene || name === values.scene);
   if (scenes.length === 0) throw new Error(`No scene named "${values.scene}". Scenes: ${SCENES.map((s) => s.name).join(', ')}.`);
   const renderers = RENDERER_NAMES.filter((name) => !values.renderer || name === values.renderer);
@@ -74,7 +83,7 @@ async function main(): Promise<void> {
         // Take turns going first, so warming up doesn't favor one build.
         const order = !before ? [after] : round % 2 === 1 ? [before, after] : [after, before];
         for (const build of order) {
-          const reading = await measure(browser.page, build.url, result.scene, result.renderer);
+          const reading = await measure(browser.page, build.url, result.scene, result.renderer, denoise);
           gpu = reading.gpu;
           (build === after ? result.after : result.before).push(reading.timing?.p50 ?? Number.NaN);
           if (build === after) result.p99.push(reading.timing?.p99 ?? Number.NaN);
@@ -84,6 +93,8 @@ async function main(): Promise<void> {
       }
     }
     const power = await powerState(browser.page);
+    if (denoise > 0) console.log(`Denoise slider at ${denoise} (a build without one doesn't denoise).
+`);
     console.log(formatReport({ gpu, canvas: `${WIDTH}×${HEIGHT}`, power, rounds, results }));
   } finally {
     await browser.close();

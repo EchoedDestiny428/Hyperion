@@ -1,10 +1,21 @@
 import shaderSource from './tracer.wgsl?raw';
 import { type Scene, packScene } from '../scene/scene.ts';
+import { createBufferWithData, logCompilationMessages } from '../gpu/shader.ts';
 import { FRAME_UNIFORM_FLOATS, type FrameParams, packFrameUniforms } from './frame-uniforms.ts';
+import { PIXEL_RECORD_BYTES } from './gpu-layout.ts';
+
+// The per-pixel records (struct PixelRecord in tracer.wgsl), which the
+// denoiser reads, with the frame uniforms they were drawn with.
+export interface TracerOutput {
+  frame: GPUBuffer; // struct Frame
+  pixels: GPUBuffer; // one PixelRecord per pixel, row by row
+  width: number;
+  height: number;
+}
 
 export interface TracerPass {
   // Uploads `scene` to the GPU first if it isn't the one drawn last time, and
-  // resizes the accumulation buffer if the canvas size changed.
+  // resizes the per-pixel records if the canvas size changed.
   // `timestampWrites` (from gpu/timer.ts) measures the pass's GPU time.
   encode(
     encoder: GPUCommandEncoder,
@@ -13,6 +24,9 @@ export interface TracerPass {
     scene: Scene,
     timestampWrites?: GPURenderPassTimestampWrites,
   ): void;
+  // What the last encode() wrote. Null before the first one, and when the
+  // canvas is too big for the records (see createRecords).
+  output(): TracerOutput | null;
 }
 
 // The GPU copy of one scene: one buffer per part of packScene()'s result.
@@ -27,17 +41,16 @@ interface SceneBuffers {
   bvhItems: GPUBuffer;
 }
 
-// The running total of samples, one vec4f (16 bytes) per pixel.
-interface Accumulation {
+// The running totals and G-buffer, one PixelRecord per pixel.
+interface Records {
   width: number;
   height: number;
   buffer: GPUBuffer;
+  complete: boolean; // false if the canvas was too big and it holds a single record
 }
 
-const ACCUMULATION_BYTES_PER_PIXEL = 16;
-
 // Everything here is created once, except the scene's buffers and the
-// accumulation buffer, which are rebuilt when the scene or canvas size
+// per-pixel records, which are rebuilt when the scene or canvas size
 // changes; encode() runs every frame.
 export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): TracerPass {
   const module = device.createShaderModule({ label: 'tracer', code: shaderSource });
@@ -64,7 +77,7 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
   const uniforms = new Float32Array(FRAME_UNIFORM_FLOATS); // reused every frame
 
   let sceneBuffers: SceneBuffers | null = null;
-  let accumulation: Accumulation | null = null;
+  let records: Records | null = null;
   let bindGroup: GPUBindGroup | null = null; // points the shader at all of the above
 
   return {
@@ -73,8 +86,8 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
         sceneBuffers = uploadScene(device, scene, sceneBuffers);
         bindGroup = null;
       }
-      if (accumulation?.width !== params.width || accumulation.height !== params.height) {
-        accumulation = createAccumulation(device, params.width, params.height, accumulation);
+      if (records?.width !== params.width || records.height !== params.height) {
+        records = createRecords(device, params.width, params.height, records);
         bindGroup = null;
       }
       // The binding numbers match the @binding(n) declarations in tracer.wgsl.
@@ -86,7 +99,7 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
           { binding: 1, resource: { buffer: sceneBuffers.info } },
           { binding: 2, resource: { buffer: sceneBuffers.spheres } },
           { binding: 3, resource: { buffer: sceneBuffers.materials } },
-          { binding: 4, resource: { buffer: accumulation.buffer } },
+          { binding: 4, resource: { buffer: records.buffer } },
           { binding: 5, resource: { buffer: sceneBuffers.boxes } },
           { binding: 6, resource: { buffer: sceneBuffers.lights } },
           { binding: 7, resource: { buffer: sceneBuffers.bvhNodes } },
@@ -108,6 +121,10 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
       pass.setBindGroup(0, bindGroup);
       pass.draw(3); // the full-screen triangle; the shader computes its corners
       pass.end();
+    },
+    output() {
+      if (!records?.complete) return null;
+      return { frame: uniformBuffer, pixels: records.buffer, width: records.width, height: records.height };
     },
   };
 }
@@ -138,49 +155,21 @@ function uploadScene(device: GPUDevice, scene: Scene, previous: SceneBuffers | n
   return uploaded;
 }
 
-// The running total needs no initial contents: the first sample after any
-// change overwrites it rather than adding to it.
-function createAccumulation(
-  device: GPUDevice,
-  width: number,
-  height: number,
-  previous: Accumulation | null,
-): Accumulation {
+// The records need no initial contents: the first sample after any change
+// overwrites them rather than adding to them.
+function createRecords(device: GPUDevice, width: number, height: number, previous: Records | null): Records {
   previous?.buffer.destroy();
-  let size = width * height * ACCUMULATION_BYTES_PER_PIXEL;
+  let size = width * height * PIXEL_RECORD_BYTES;
   const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
-  if (size > limit) {
+  const complete = size <= limit;
+  if (!complete) {
     const mb = (bytes: number): string => `${Math.round(bytes / 2 ** 20)} MB`;
     console.warn(
-      `[accumulation] A ${width}×${height} canvas needs ${mb(size)} for its running total, but this GPU allows ` +
-        `${mb(limit)} in one buffer, so the image won't refine. Make the window smaller to fix it.`,
+      `[accumulation] A ${width}×${height} canvas needs ${mb(size)} for its running totals, but this GPU allows ` +
+        `${mb(limit)} in one buffer, so the image won't refine or denoise. Make the window smaller to fix it.`,
     );
-    size = ACCUMULATION_BYTES_PER_PIXEL; // a single element; the shader then skips accumulating
+    size = PIXEL_RECORD_BYTES; // a single record; the shader then skips accumulating
   }
-  const buffer = device.createBuffer({ label: `accumulation ${width}×${height}`, size, usage: GPUBufferUsage.STORAGE });
-  return { width, height, buffer };
-}
-
-// A buffer holding `data`, which shaders read as `usage` (UNIFORM or STORAGE).
-function createBufferWithData(
-  device: GPUDevice,
-  label: string,
-  data: ArrayBuffer,
-  usage: GPUBufferUsageFlags,
-): GPUBuffer {
-  const buffer = device.createBuffer({ label, size: data.byteLength, usage: usage | GPUBufferUsage.COPY_DST });
-  device.queue.writeBuffer(buffer, 0, data);
-  return buffer;
-}
-
-// Shader compile errors and warnings, with line numbers, in the console.
-// Without this you only get a generic "invalid pipeline" error.
-async function logCompilationMessages(module: GPUShaderModule, fileName: string): Promise<void> {
-  const info = await module.getCompilationInfo();
-  for (const m of info.messages) {
-    const text = `[WGSL ${m.type}] ${fileName}:${m.lineNum}:${m.linePos} ${m.message}`;
-    if (m.type === 'error') console.error(text);
-    else if (m.type === 'warning') console.warn(text);
-    else console.info(text);
-  }
+  const buffer = device.createBuffer({ label: `pixel records ${width}×${height}`, size, usage: GPUBufferUsage.STORAGE });
+  return { width, height, buffer, complete };
 }

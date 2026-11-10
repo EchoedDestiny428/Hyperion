@@ -1,11 +1,14 @@
 import { type Pace, SAMPLE_LIMITS } from '../render/accumulation.ts';
 import {
   type CameraMode,
+  MAX_DENOISE_LEVEL,
   RENDERER_NAMES,
   type RenderSettings,
   type Renderer,
   VIEW_NAMES,
   type View,
+  denoiseLevel,
+  denoiseReach,
 } from '../render/settings.ts';
 
 export const RENDERER_TEXT: Record<Renderer, string> = {
@@ -67,6 +70,7 @@ export function attachSettingsPanel(
     settings.renderer,
     (value) => {
       settings.renderer = value as Renderer; // only RENDERER_NAMES are offered
+      denoise.update();
     },
   );
 
@@ -84,6 +88,7 @@ export function attachSettingsPanel(
     (value) => {
       settings.view = value as View; // only VIEW_NAMES are offered
       viewSelect.title = VIEW_TEXT[settings.view].hint;
+      denoise.update();
     },
   );
   viewSelect.title = VIEW_TEXT[settings.view].hint;
@@ -97,10 +102,13 @@ export function attachSettingsPanel(
     },
   );
 
+  const denoise = denoiseSlider(settings);
+
   container.append(
     labelled('Renderer ', rendererSelect),
     labelled('Camera ', cameraSelect),
     labelled('View ', viewSelect),
+    denoise.element,
     sunBox,
     ...antiAliasingControls(settings, actions),
   );
@@ -147,6 +155,47 @@ function antiAliasingControls(settings: RenderSettings, actions: PanelActions): 
   buttons.append(next, button('Restart', actions.restartSamples));
 
   return [heading, labelled('Samples ', limitSelect), labelled('Pace ', paceSelect), buttons];
+}
+
+// The Denoise slider: 0 is off, and each step adds a filter pass that
+// reaches twice as far (denoise.wgsl). It moves freely on a finished image:
+// the frame loop redraws from the samples already taken.
+function denoiseSlider(settings: RenderSettings): { element: HTMLLabelElement; update(): void } {
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = '0';
+  input.max = String(MAX_DENOISE_LEVEL);
+  input.step = '1';
+  input.value = String(settings.denoise);
+
+  const value = document.createElement('span');
+  const update = (): void => {
+    // Disabled where it has no effect, so it can't seem broken.
+    const applies = denoiseLevel({ ...settings, denoise: 1 }) > 0;
+    input.disabled = !applies;
+    const level = settings.denoise;
+    if (!applies) value.textContent = 'path tracer, final image only';
+    else if (level === 0) value.textContent = 'off';
+    else value.textContent = `${level} ${level === 1 ? 'pass' : 'passes'}, reach ${denoiseReach(level)} px`;
+  };
+  update();
+
+  // 'input' fires continuously while dragging, so the image follows live.
+  input.addEventListener('input', () => {
+    settings.denoise = Number(input.value);
+    update();
+  });
+  // Give the keyboard back to WASD once the slider is let go.
+  input.addEventListener('change', () => input.blur());
+
+  const label = document.createElement('label');
+  label.className = 'slider';
+  label.title =
+    'Smooths away the grain the path tracer leaves, keeping edges: each pixel is averaged with neighbors on the same surface whose brightness differs by no more than the noise explains. ' +
+    'Each step adds a pass reaching twice as far, which removes coarser blotches but can smear fine detail. ' +
+    'The filter does less as more samples come in.';
+  label.append('Denoise ', value, input);
+  return { element: label, update };
 }
 
 function labelled(text: string, control: HTMLElement): HTMLLabelElement {

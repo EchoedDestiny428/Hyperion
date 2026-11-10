@@ -5,11 +5,13 @@ import { type Fly, attachFlyControls, flyBasis, flyFromOrbit, moveFly, orbitFrom
 import { type Orbit, attachOrbitControls, orbitBasis, spinOrbit } from './camera/orbit.ts';
 import { trackCanvasSize } from './gpu/canvas.ts';
 import { createDevice, describeAdapter, shouldRestart } from './gpu/device.ts';
-import { createGpuTimer } from './gpu/timer.ts';
+import { createGpuTimer, firstAndLast } from './gpu/timer.ts';
 import { deviceFailure, lostTooOften, parseSimulation, probe } from './platform/detect.ts';
 import { hideProblem, showProblem } from './platform/unsupported.ts';
 import { createSampleCounter, targetSamples } from './render/accumulation.ts';
-import { type CameraMode, RENDERERS, VIEWS, defaultSettings } from './render/settings.ts';
+import { createDenoisePass } from './render/denoise-pass.ts';
+import type { FilterInputs } from './render/denoise-schedule.ts';
+import { type CameraMode, RENDERERS, VIEWS, defaultSettings, denoiseLevel } from './render/settings.ts';
 import { createTracerPass } from './render/tracer-pass.ts';
 import { DEFAULT_SCENE, SCENES, findScene } from './scene/registry.ts';
 import type { Scene } from './scene/scene.ts';
@@ -131,6 +133,7 @@ async function start(): Promise<void> {
   context.configure({ device, format, alphaMode: 'opaque' });
 
   const pass = createTracerPass(device, format);
+  const denoiser = createDenoisePass(device, format);
   const timer = createGpuTimer(device); // null without timestamp-query
   const hud = createHud(hudElement, describeAdapter(adapter));
   // Per device: a new device has a new, empty accumulation buffer.
@@ -140,6 +143,8 @@ async function start(): Promise<void> {
   let running = true;
   let previousNow: number | null = null;
   let lastSampleTime = -Infinity;
+  let shownLevel = 0; // denoise passes in the image on screen
+  let generation = 0; // counts restarts of the running total, so the denoiser can tell images apart
 
   // requestAnimationFrame calls us once per display refresh, just before the
   // browser paints. `now` is on the same clock as performance.now().
@@ -173,16 +178,41 @@ async function start(): Promise<void> {
     });
     stepRequested = false;
 
-    // Draw only when the image needs another sample. Otherwise skip the GPU
-    // work: without a new texture from getCurrentTexture(), the canvas keeps
-    // showing the last image.
-    if (samples.held < target) {
-      const sampleIndex = samples.take();
-      lastSampleTime = now;
+    // Draw only when the image needs another sample, or the Denoise slider
+    // moved on a finished image (which redraws it from the samples it holds,
+    // without adding one). Otherwise skip the GPU work: without a new
+    // texture from getCurrentTexture(), the canvas keeps showing the last image.
+    const level = denoiseLevel(settings);
+    // What the denoiser needs to know about the image, once this frame's sample is in.
+    const image = (passes: number): FilterInputs => ({
+      generation,
+      samples: samples.held,
+      level: passes,
+      finished: samples.held >= settings.sampleLimit,
+    });
+    const addSample = samples.held < target;
+    const output = pass.output();
+    const redenoise = !addSample && level !== shownLevel && output !== null;
+    if (addSample || redenoise) {
       // Record GPU commands into an encoder, then submit them as one batch.
       const encoder = device.createCommandEncoder({ label: 'frame' });
       const canvasView = context.getCurrentTexture().createView();
-      pass.encode(encoder, canvasView, { ...inputs, sampleIndex }, scene, timer?.passTimestamps());
+      const stamps = timer?.passTimestamps();
+      if (addSample) {
+        const sampleIndex = samples.take();
+        if (sampleIndex === 0) generation++;
+        lastSampleTime = now;
+        // The tracer draws the plain average; the denoiser, if on, then
+        // draws over it. The GPU time covers both.
+        const { first, last } = firstAndLast(stamps);
+        pass.encode(encoder, canvasView, { ...inputs, sampleIndex }, scene, level > 0 ? first : stamps);
+        const traced = pass.output(); // null if the canvas is too big to keep records for
+        if (level > 0 && traced) denoiser.encode(encoder, canvasView, traced, image(level), last);
+        shownLevel = traced ? level : 0;
+      } else if (output) {
+        denoiser.encode(encoder, canvasView, output, image(level), stamps);
+        shownLevel = level;
+      }
       timer?.resolve(encoder);
       device.queue.submit([encoder.finish()]);
       timer?.collect();

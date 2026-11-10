@@ -30,7 +30,7 @@ export function createHud(element: HTMLElement, gpuLabel: string): Hud {
 
   const render = (info: HudFrame, frameText: string): void => {
     element.textContent = [
-      `Hyperion · C1 in progress · ${info.renderer}`,
+      `Hyperion · C2 in progress · ${info.renderer}`,
       `GPU      ${gpuLabel}`,
       `Canvas   ${info.width}×${info.height}`,
       `Frame    ${frameText}`,

@@ -132,6 +132,13 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 
 **Order** (decided 2026-11-10): start with the edge-aware spatial filter (step 9), because it also cleans up still images and needs no reprojection. Even at 1,024 samples, the dreamspace's indirectly lit walls stay visibly grainy. Measure it with `npm run noise`, both how much cleaner it gets and what it smears. Then the temporal steps.
 
+**Done so far:** the spatial filter for still images (step 9), as a Denoise slider in the Renderer panel, from 0 (off) to 5 passes, default 2. It brings parts of steps 1 and 6 with it:
+- a G-buffer of color, normal and distance, which looks through perfect mirrors to what they show;
+- demodulation;
+- a test that mixes only neighbors of similar color, since a surface's glint and haze aren't in proportion to its color.
+
+At 2 passes every scene gets cleaner, rooms the most: the dreamspace has 72% less error at 16 samples, as clean as 13× the samples. See `docs/learn/C2.md`, section 8. Glass, water and glossy reflections are still smoothed as part of the surface they're seen on (steps 6 and 7).
+
 **Steps** (first draft):
 1. **A G-buffer:** for each pixel, keep the distance and normal of the surface the camera ray hit, next to the running total. The debug views already compute both.
 2. **Two history buffers,** swapped each frame: read last frame's, write this frame's. Today's single buffer only works because each pixel reads its own slot; after reprojection, pixels read each other's.

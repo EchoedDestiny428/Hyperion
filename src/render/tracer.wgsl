@@ -224,6 +224,35 @@ fn intersectGround(ray: Ray) -> f32 {
 // run of the shader has its own copy of a `private` variable.
 var<private> rayCount: u32;
 
+// What the path tracer's camera sees in this pixel, kept for the denoiser (see
+// PixelRecord): the color of the first surface the camera ray hits, and its
+// normal (facing the camera) with its distance.
+// - In a perfect mirror, the denoiser should smooth the reflected surface, not
+//   the mirror, or it would smear the reflection. So it's the surface the
+//   mirror shows, as its mirror image: as far away as the reflected path is
+//   long, turned the way the mirror shows it (mirrorMatrix), and tinted by
+//   the mirror's color. Chrome reflects the color of what it shows.
+// - The distance stays NO_HIT where there's nothing to denoise: sky, and
+//   glowing surfaces, whose light the camera sees directly, without noise.
+var<private> firstColor: vec3f;
+var<private> firstSurface: vec4f;
+
+// Polished metal: the path always reflects off it in one exact direction.
+fn isPerfectMirror(material: Material) -> bool {
+  return material.metallic >= 1.0 && material.roughness < POLISHED_ROUGHNESS;
+}
+
+// The reflection across the plane with unit normal n, as a matrix: I - 2nnᵀ.
+// Like the mirror image of a room, the reflected world is the real one turned
+// inside out, so the denoiser compares normals the way the mirror shows them.
+fn mirrorMatrix(n: vec3f) -> mat3x3f {
+  return mat3x3f(
+    vec3f(1.0, 0.0, 0.0) - 2.0 * n * n.x,
+    vec3f(0.0, 1.0, 0.0) - 2.0 * n * n.y,
+    vec3f(0.0, 0.0, 1.0) - 2.0 * n * n.z,
+  );
+}
+
 // ---- BVH -------------------------------------------------------------------
 // A tree of boxes around the objects (built by scene/bvh.ts), so a ray skips
 // every object inside a box it misses. Must match packBvh in bvh.ts
@@ -1029,6 +1058,12 @@ fn tracePath(primary: Ray) -> vec3f {
   // what this ray finds: camera rays, perfect mirrors and glass.
   var bouncePdf = 0.0;
   var scattered = false; // whether the path has left anything rough or matte
+  // For finding firstSurface: whether it's still to be found, how far the
+  // path has come, and the perfect mirrors on the way.
+  var seeking = true;
+  var travelled = 0.0;
+  var mirrorTint = vec3f(1.0);
+  var mirrors = mat3x3f(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
 
   for (var bounce = 0u; bounce < MAX_PATH_BOUNCES; bounce++) {
     let hit = intersectScene(ray);
@@ -1044,6 +1079,26 @@ fn tracePath(primary: Ray) -> vec3f {
     }
 
     let material = materials[hit.material];
+    if (seeking) {
+      // What the camera sees, for the denoiser (see firstSurface). This only
+      // watches the path: surfaceColor() uses no random numbers, so the path
+      // comes out exactly as it would without it.
+      travelled += hit.t;
+      let facing = select(-hit.normal, hit.normal, dot(ray.dir, hit.normal) < 0.0);
+      let color = surfaceColor(material, hit.position, hit.normal);
+      if (isPerfectMirror(material)) {
+        // The path reflects exactly here (sampleBounce), so carry on to what
+        // the mirror shows, tinted by it.
+        mirrorTint *= color;
+        mirrors = mirrors * mirrorMatrix(facing);
+      } else {
+        seeking = false;
+        if (all(material.emission == vec3f(0.0))) {
+          firstColor = mirrorTint * color;
+          firstSurface = vec4f(mirrors * facing, travelled);
+        }
+      }
+    }
     // If it glows, a shadow ray might have found this point too. That chance,
     // as in lightFromObjects, comes from the distance and the angle.
     let cosLight = max(abs(dot(ray.dir, hit.normal)), 1e-5);
@@ -1164,10 +1219,28 @@ fn heat(rays: f32) -> vec3f {
 }
 
 // ---- Accumulation --------------------------------------------------------
-// The running total of samples for each pixel, one vec4f per pixel, row by
-// row. Its size follows the canvas (tracer-pass.ts). If the canvas is too
-// big for one buffer, it holds a single element and the image doesn't refine.
-@group(0) @binding(4) var<storage, read_write> accumulation: array<vec4f>;
+// One record per pixel, row by row, kept from sample to sample. Its size
+// follows the canvas (tracer-pass.ts). If the canvas is too big for one
+// buffer, it holds a single record and the image doesn't refine.
+//
+// Besides the running total of light, each record keeps what the denoiser
+// (denoise.wgsl) needs to tell noise from detail: the sum of each sample's
+// brightness squared, to work out how noisy the pixel still is, and what the
+// pixel shows (a "G-buffer": surface color, facing and distance). The copy of
+// this struct in denoise.wgsl must match (denoise.test.ts checks).
+struct PixelRecord {
+  light: vec4f, // rgb: running total of light (or a debug view's value); a: of luminance(light)²
+  albedo: vec4f, // rgb: running total of the first surface's color (firstColor); a: unused
+  surface: vec4f, // firstSurface from sample 0, whose ray goes through the pixel's center
+}
+
+@group(0) @binding(4) var<storage, read_write> pixels: array<PixelRecord>;
+
+// How bright a color looks: green counts most, blue least (Rec. 709 weights).
+// https://en.wikipedia.org/wiki/Relative_luminance
+fn luminance(color: vec3f) -> f32 {
+  return dot(color, vec3f(0.2126, 0.7152, 0.0722));
+}
 
 // ---- Output --------------------------------------------------------------
 // Squeezes unbounded brightness into 0..1 with a gentle film-like curve,
@@ -1221,6 +1294,8 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   // This sample's value: light for the final image, the number of rays for
   // VIEW_RAYS, or a debug view's false color.
   rayCount = 0u;
+  firstColor = vec3f(0.0);
+  firstSurface = vec4f(0.0, 0.0, 0.0, NO_HIT);
   var value: vec3f;
   if (frame.view == VIEW_FINAL || frame.view == VIEW_RAYS) {
     var light: vec3f;
@@ -1238,17 +1313,22 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   // the final image the average is taken before tone mapping: averaging
   // light, not finished screen colors, is what makes a half-covered edge
   // pixel look right.
-  var total = value;
+  var total = vec4f(value, luminance(value) * luminance(value));
+  var albedoTotal = vec4f(firstColor, 0.0);
   var count = 1.0;
   let slot = pixelIndex.y * u32(frame.resolution.x) + pixelIndex.x;
-  if (slot < arrayLength(&accumulation)) {
+  if (slot < arrayLength(&pixels)) {
     if (frame.sampleIndex > 0u) {
-      total += accumulation[slot].rgb;
+      total += pixels[slot].light;
+      albedoTotal += pixels[slot].albedo;
       count = f32(frame.sampleIndex + 1u);
+    } else {
+      pixels[slot].surface = firstSurface; // the center ray's; later samples are jittered
     }
-    accumulation[slot] = vec4f(total, 0.0);
+    pixels[slot].light = total;
+    pixels[slot].albedo = albedoTotal;
   }
-  var color = total / count;
+  var color = total.rgb / count;
 
   // Only the final image is light that needs converting for the screen.
   if (frame.view == VIEW_FINAL) {
