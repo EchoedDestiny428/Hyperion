@@ -4,7 +4,7 @@ For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of
 
 ## Where things stand
 
-- **Branch:** `c1-path-tracer`, pushed. `main` has C0, the debug views and the editor config fix; C1 merges into `main` when it's finished.
+- **Branch:** `c2-denoising`, new, branched from `main`. C1 is finished and merged into `main` (2026-11-10); `c1-path-tracer` stays on GitHub as a record.
 - **C1 chunks 1–3 are done** (see `docs/PLAN.md`):
   - chunk 1: GPU random numbers, progressive accumulation, anti-aliasing;
   - chunk 2: path tracer (bounce light, sky light, soft sun shadows, Russian roulette), the Renderer menu (Whitted kept for comparison), GPU timing;
@@ -15,16 +15,16 @@ For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of
 - **Checks:** `npm run typecheck`, `npm test` (70 passing) and `npm run build` all pass.
 - **Learning notes:** `docs/learn/C0.md`, and `docs/learn/C1.md` up to section 33. Keep adding a section per change, in the same plain style.
 
-## Next: finish C1
+## Next: start C2
 
-Photo quality came before more optimization (decided 2026-11-01), and the room now exists, so what's slow can be measured. In order, each needing approval first:
+C1 is done. In order, each needing approval first:
 
-1. Retest "any hit" shadow rays now that there's a BVH: a shadow ray could stop walking the tree at its first blocker.
-2. Finish the learning note (step 15). Everything else on C1's done list is met.
+1. The edge-aware spatial filter (C2 step 9) first, for still images: a G-buffer (normal, distance, base color), lighting divided by base color before filtering and multiplied back after, and a few à-trous passes. Measure with `npm run noise` how much cleaner it gets and what it smears (contact shadows, highlights, pool reflections). Learning note: `docs/learn/C2.md`.
+2. Optional: retest "any hit" shadow rays now that there's a BVH, since a shadow ray could stop walking the tree at its first blocker.
 
-Done since the last update: `npm run noise` (noise against a clean reference, exactly repeatable), shadow rays aimed only at visible box faces, and a BVH over spheres and boxes, walked without a stack. See "Optimization pass" in `docs/PLAN.md` and sections 34–38 of the learning note.
+Done since the last update: `npm run noise` (noise against a clean reference, exactly repeatable), shadow rays aimed only at visible box faces, and a BVH over spheres and boxes, walked without a stack. See "Optimization pass" in `docs/PLAN.md` and sections 34–38 of the learning note, which now also ends with how it all fits together (39) and what C1 doesn't do (40).
 
-Then C2. The fly camera's pointer lock, walking and collisions wait for C2 too.
+The fly camera's pointer lock, walking and collisions come later in C2, once the image stays clean while moving.
 
 ## Testing on another machine
 

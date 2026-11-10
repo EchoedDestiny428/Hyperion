@@ -21,8 +21,8 @@
 | Milestone | Status |
 |---|---|
 | C0: WebGPU skeleton, Whitted ray tracer | done |
-| C1: path tracer | in progress |
-| C2: temporal reprojection and denoising | later |
+| C1: path tracer | done |
+| C2: temporal reprojection and denoising | in progress |
 | Act 2: large scenes | later |
 
 ## Act 1: real-time ray tracing
@@ -33,7 +33,7 @@
 - A full-screen fragment-shader ray tracer: spheres, a ground plane, hard shadows, mirror reflections, ACES tone mapping.
 - Scene layouts as data (`src/scene/layouts/`), chosen from a menu or with `?scene=`. Material kinds: diffuse, mirror, checker.
 
-### C1: path tracer (in progress)
+### C1: path tracer (done)
 
 **From the code comments:**
 - real bounce light, replacing the fake `ambient` term;
@@ -117,7 +117,7 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 
 13. ~~GPU timing~~: done early, in chunk 2. The HUD shows p50/p95/p99 GPU time where the browser offers `timestamp-query`.
 14. ~~Keep the Whitted tracer selectable~~: done in chunk 2, as the Renderer menu.
-15. Finish the learning note `docs/learn/C1.md`.
+15. ~~Finish the learning note~~: done. `docs/learn/C1.md` ends with how the whole renderer fits together (section 39), what C1 doesn't do (section 40), and every word to know.
 
 **Done when:**
 - a still camera converges to a clean image with soft shadows and color bleeding;
@@ -126,9 +126,11 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 - materials are set by parameters, and a partly transparent or rough sphere renders correctly;
 - the HUD shows GPU time where it's supported.
 
-### C2: temporal reprojection and denoising (later)
+### C2: temporal reprojection and denoising (in progress)
 
 **Goal:** keep the image clean while the camera moves, so you can walk through the dreamspace. C1 makes each sample correct and as low-noise as possible; C2 makes samples last, by reusing them across frames and between neighboring pixels. C1's accumulation is the special case where nothing moved.
+
+**Order** (decided 2026-11-10): start with the edge-aware spatial filter (step 9), because it also cleans up still images and needs no reprojection. Even at 1,024 samples, the dreamspace's indirectly lit walls stay visibly grainy. Measure it with `npm run noise`, both how much cleaner it gets and what it smears. Then the temporal steps.
 
 **Steps** (first draft):
 1. **A G-buffer:** for each pixel, keep the distance and normal of the surface the camera ray hit, next to the running total. The debug views already compute both.

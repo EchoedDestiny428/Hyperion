@@ -2,7 +2,7 @@
 
 A WebGPU tech demo: real-time ray tracing in the browser, and later, large scenes that load in seconds.
 
-**Status:** early development. Milestone **C0** is a live Whitted-style ray tracer of a small procedural scene. Plain-language explanations of how each part works are in [`docs/learn/`](docs/learn/).
+**Status:** early development. Milestone **C1** is done: a path tracer with real bounce light, glTF-style materials (metal, plastic, glass, glowing surfaces), and a BVH, refining to a clean still image in the browser. **C2**, keeping the image clean while the camera moves, is next. Plain-language explanations of how each part works are in [`docs/learn/`](docs/learn/).
 
 ## Run it
 
