@@ -1,6 +1,7 @@
 import { type Pace, SAMPLE_LIMITS } from '../render/accumulation.ts';
 import {
   type CameraMode,
+  MAX_BOUNCES,
   MAX_DENOISE_LEVEL,
   RENDERER_NAMES,
   type RenderSettings,
@@ -66,6 +67,7 @@ export function attachSettingsPanel(
     (value) => {
       settings.renderer = value as Renderer; // only RENDERER_NAMES are offered
       denoise.update();
+      bounces.update();
     },
   );
 
@@ -93,13 +95,39 @@ export function attachSettingsPanel(
     },
   );
 
-  const denoise = denoiseSlider(settings);
+  const denoise = slider({
+    label: 'Denoise ',
+    min: 0,
+    max: MAX_DENOISE_LEVEL,
+    get: () => settings.denoise,
+    set: (value) => {
+      settings.denoise = value;
+    },
+    // Only where it has an effect, so it can't seem broken.
+    applies: () => denoiseLevel({ ...settings, denoise: 1 }) > 0,
+    notApplying: 'path tracer, final image only',
+    text: (level) =>
+      level === 0 ? 'off' : `${level} ${level === 1 ? 'pass' : 'passes'}, reach ${denoiseReach(level)} px`,
+  });
+  const bounces = slider({
+    label: 'Bounces ',
+    min: 1,
+    max: MAX_BOUNCES,
+    get: () => settings.bounces,
+    set: (value) => {
+      settings.bounces = value;
+    },
+    applies: () => settings.renderer === 'path',
+    notApplying: 'path tracer only',
+    text: (count) => (count === 1 ? '1 (direct light only)' : String(count)),
+  });
 
   container.append(
     labelled('Renderer ', rendererSelect),
     labelled('Camera ', cameraSelect),
     labelled('View ', viewSelect),
     denoise.element,
+    bounces.element,
     sunBox,
     ...antiAliasingControls(settings, actions),
   );
@@ -148,33 +176,43 @@ function antiAliasingControls(settings: RenderSettings, actions: PanelActions): 
   return [heading, labelled('Samples ', limitSelect), labelled('Pace ', paceSelect), buttons];
 }
 
-// The Denoise slider: 0 is off, and each step adds a filter pass that
-// reaches twice as far (denoise.wgsl), removing coarser blotches but able
-// to smear finer detail. It moves freely on a finished image: the frame
-// loop redraws from the samples already taken.
-function denoiseSlider(settings: RenderSettings): { element: HTMLLabelElement; update(): void } {
+interface SliderOptions {
+  label: string;
+  min: number;
+  max: number;
+  get(): number;
+  set(value: number): void;
+  applies(): boolean; // false disables it
+  notApplying: string; // shown while disabled
+  text(value: number): string;
+}
+
+// A whole-number slider with its value shown beside the label.
+// - Denoise: 0 is off, and each step adds a filter pass that reaches twice
+//   as far (denoise.wgsl), removing coarser blotches but able to smear finer
+//   detail. It moves freely on a finished image: the frame loop redraws from
+//   the samples already taken.
+// - Bounces: the most surfaces a path visits (tracePath). Changing it
+//   changes the picture, so the samples start over.
+function slider(options: SliderOptions): { element: HTMLLabelElement; update(): void } {
   const input = document.createElement('input');
   input.type = 'range';
-  input.min = '0';
-  input.max = String(MAX_DENOISE_LEVEL);
+  input.min = String(options.min);
+  input.max = String(options.max);
   input.step = '1';
-  input.value = String(settings.denoise);
+  input.value = String(options.get());
 
   const value = document.createElement('span');
   const update = (): void => {
-    // Disabled where it has no effect, so it can't seem broken.
-    const applies = denoiseLevel({ ...settings, denoise: 1 }) > 0;
+    const applies = options.applies();
     input.disabled = !applies;
-    const level = settings.denoise;
-    if (!applies) value.textContent = 'path tracer, final image only';
-    else if (level === 0) value.textContent = 'off';
-    else value.textContent = `${level} ${level === 1 ? 'pass' : 'passes'}, reach ${denoiseReach(level)} px`;
+    value.textContent = applies ? options.text(options.get()) : options.notApplying;
   };
   update();
 
   // 'input' fires continuously while dragging, so the image follows live.
   input.addEventListener('input', () => {
-    settings.denoise = Number(input.value);
+    options.set(Number(input.value));
     update();
   });
   // Give the keyboard back to WASD once the slider is let go.
@@ -182,7 +220,7 @@ function denoiseSlider(settings: RenderSettings): { element: HTMLLabelElement; u
 
   const label = document.createElement('label');
   label.className = 'slider';
-  label.append('Denoise ', value, input);
+  label.append(options.label, value, input);
   return { element: label, update };
 }
 

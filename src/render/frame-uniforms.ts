@@ -10,7 +10,10 @@ import type { CameraBasis } from '../camera/orbit.ts';
 //                         8..10 cameraUp     11 time
 //                        12..14 cameraForward 15 renderer (u32)
 //                        16..17 resolution   18 view (u32)   19 sampleIndex (u32)
-export const FRAME_UNIFORM_FLOATS = 20; // = 80 bytes
+//                        20 maxBounces (u32)  21..23 padding
+// A uniform struct's size rounds up to a multiple of 16 bytes, so the one
+// value after the first 80 bytes takes 16.
+export const FRAME_UNIFORM_FLOATS = 24; // = 96 bytes
 
 export interface FrameParams {
   camera: CameraBasis;
@@ -21,6 +24,7 @@ export interface FrameParams {
   renderer: number; // a value of RENDERERS in settings.ts
   view: number; // a value of VIEWS in settings.ts
   sampleIndex: number; // samples already in the running total; 0 = start over (accumulation.ts)
+  maxBounces: number; // path tracer: the most surfaces one path visits
 }
 
 export function packFrameUniforms(
@@ -43,5 +47,6 @@ export function packFrameUniforms(
   out[17] = p.height;
   ints[18] = p.view;
   ints[19] = p.sampleIndex;
+  ints[20] = p.maxBounces;
   return out;
 }

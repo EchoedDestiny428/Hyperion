@@ -164,6 +164,7 @@ async function start(): Promise<void> {
       timeSeconds: sunSeconds,
       renderer: RENDERERS[settings.renderer],
       view: VIEWS[settings.view],
+      maxBounces: settings.bounces,
     };
     samples.check(inputs, scene);
     // Restart, or lower the limit below what the image already holds: start over.

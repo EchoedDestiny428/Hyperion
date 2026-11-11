@@ -22,6 +22,8 @@ struct Frame {
   resolution: vec2f,
   view: u32, // one of VIEW_*
   sampleIndex: u32, // samples already in the running total; 0 = start over
+  maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
+  // WGSL rounds the struct up to 96 bytes, a multiple of 16.
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -1024,7 +1026,15 @@ fn traceWhitted(primary: Ray) -> vec3f {
 // it adds the light arriving there directly from the sun and the glowing
 // objects (via shadow rays) and then bounces on in a random direction, until
 // the path escapes to the sky (which adds the sky's light) or ends.
-const MAX_PATH_BOUNCES = 8u;
+//
+// How many surfaces a path can visit comes from the Bounces slider
+// (frame.maxBounces, 8 by default). With 1, a path stops at the first
+// surface the camera sees: it only gets light straight from the sun, the
+// sky and glowing objects ("direct light"). Each more adds light that has
+// bounced once more first ("indirect light"): color bleeding, light around
+// corners, mirrors showing mirrors. Russian roulette below ends most paths
+// long before the limit, so raising it costs little except where light
+// keeps bouncing between mirrors or through glass.
 
 // Once a path has scattered off something rough, this is the most light one
 // step of it can add. A rare path can reach something very bright, such as the
@@ -1068,7 +1078,7 @@ fn tracePath(primary: Ray) -> vec3f {
   var mirrorTint = vec3f(1.0);
   var mirrors = mat3x3f(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
 
-  for (var bounce = 0u; bounce < MAX_PATH_BOUNCES; bounce++) {
+  for (var bounce = 0u; bounce < frame.maxBounces; bounce++) {
     let hit = intersectScene(ray);
     if (bounce == 0u) {
       firstHitDistance = hit.t;

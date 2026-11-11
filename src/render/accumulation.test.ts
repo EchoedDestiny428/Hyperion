@@ -11,6 +11,7 @@ const inputs: ImageInputs = {
   timeSeconds: 0,
   renderer: 1,
   view: 0,
+  maxBounces: 8,
 };
 
 test('the counter keeps its total while nothing changes', () => {
@@ -30,6 +31,7 @@ test('any change to the inputs or the scene starts the total over', () => {
     { ...inputs, timeSeconds: 0.016 },
     { ...inputs, renderer: 0 },
     { ...inputs, view: 2 },
+    { ...inputs, maxBounces: 3 },
   ];
   for (const changed of changes) {
     const counter = createSampleCounter();

@@ -38,6 +38,7 @@ export interface RenderSettings {
   sampleLimit: number; // anti-aliasing: one of SAMPLE_LIMITS
   pace: Pace;
   denoise: number; // filter passes, 0 (off) to MAX_DENOISE_LEVEL
+  bounces: number; // path tracer: the most surfaces one path visits, 1 to MAX_BOUNCES
 }
 
 export function defaultSettings(): RenderSettings {
@@ -53,8 +54,14 @@ export function defaultSettings(): RenderSettings {
     // Measured on 2026-11-10 (docs/learn/C2.md, section 8): 2 passes made
     // every scene cleaner at 4, 16 and 64 samples, and smears the least.
     denoise: 2,
+    bounces: DEFAULT_BOUNCES,
   };
 }
+
+// The Bounces slider (tracePath in tracer.wgsl). 8 was C1's fixed limit: on
+// the Cornell box, going to 64 changed the result by under 0.5%.
+export const DEFAULT_BOUNCES = 8;
+export const MAX_BOUNCES = 64;
 
 // The Denoise slider: how many filter passes run (denoise.wgsl). Each pass
 // spreads its 5×5 grid twice as wide as the last: 1, 2, 4 … 512 pixels.

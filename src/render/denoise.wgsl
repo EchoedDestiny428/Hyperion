@@ -31,6 +31,8 @@ struct Frame {
   resolution: vec2f,
   view: u32, // one of VIEW_*
   sampleIndex: u32, // samples already in the running total; 0 = start over
+  maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
+  // WGSL rounds the struct up to 96 bytes, a multiple of 16.
 }
 
 struct PixelRecord {
