@@ -5,10 +5,11 @@
 // app's own connection to it. Every buffer, texture and pipeline we create
 // belongs to the device.
 export async function createDevice(adapter: GPUAdapter): Promise<GPUDevice> {
-  // Default limits, except buffer sizes. The accumulation buffer holds 16
-  // bytes per pixel, and the default 128 MB limit only covers about 8 million
-  // pixels, a 4K canvas. Asking for whatever this GPU allows (often gigabytes)
-  // lets bigger screens refine too. https://www.w3.org/TR/webgpu/#limits
+  // Default limits, except buffer sizes. The per-pixel records hold 64 bytes
+  // per pixel (PIXEL_RECORD_BYTES), and the default 128 MB limit only covers
+  // about 2 million pixels, a 1920×1080 canvas. Asking for whatever this GPU
+  // allows (often gigabytes) lets bigger screens refine and denoise too.
+  // https://www.w3.org/TR/webgpu/#limits
   const device = await adapter.requestDevice({
     label: 'hyperion',
     // Optional: lets the HUD show real GPU time (gpu/timer.ts). Without it

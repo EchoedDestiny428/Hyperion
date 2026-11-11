@@ -34,9 +34,10 @@ struct Frame {
 }
 
 struct PixelRecord {
-  light: vec4f, // rgb: running total of light (or a debug view's value); a: of luminance(light)²
-  albedo: vec4f, // rgb: running total of the first surface's color (firstColor); a: unused
-  surface: vec4f, // firstSurface from sample 0, whose ray goes through the pixel's center
+  light: vec4f, // the rest: rgb, running total of light (or a debug view's value); a, of luminance(light)²
+  albedo: vec4f, // the rest: rgb, running total of the first surface's color (firstColor); a, 1 once surface is set
+  surface: vec4f, // firstSurface from the first sample that hit a surface (usually sample 0, through the center)
+  noiseFree: vec4f, // the noise-free samples: rgb, running total of their screen colors (toneMap); a, how many
 }
 
 const NO_HIT = 1e30;
@@ -55,6 +56,17 @@ fn encodeSrgb(linear: vec3f) -> vec3f {
   return select(high, low, linear <= vec3f(0.0031308));
 }
 
+fn screenColor(restMean: vec3f, noiseFree: vec4f, count: f32) -> vec3f {
+  if (noiseFree.a == 0.0) {
+    return encodeSrgb(toneMap(restMean));
+  }
+  let rest = count - noiseFree.a;
+  var sum = noiseFree.rgb;
+  if (rest > 0.0) {
+    sum += rest * toneMap(restMean);
+  }
+  return encodeSrgb(sum / count);
+}
 // ---- Inputs and outputs --------------------------------------------------
 // Each step uses only some of these; 'auto' layout gives each pipeline the
 // ones its entry point uses (denoise-pass.ts).
@@ -90,6 +102,13 @@ fn sampleCount() -> f32 {
   return f32(frame.sampleIndex + 1u);
 }
 
+// How many of them hit a surface, which is what the light and albedo totals
+// hold. The others went straight to a light or the sky, so have no noise to
+// remove; they're in record.noiseFree (see tracer.wgsl's screenColor).
+fn restCount(record: PixelRecord) -> f32 {
+  return sampleCount() - record.noiseFree.a;
+}
+
 // Below this, a color counts as this dark. Dividing by a color near zero would
 // blow tiny noise up into huge numbers; multiplying by the same floor at the
 // end undoes it exactly, so the floor only limits how far noise can spread.
@@ -99,7 +118,7 @@ const ALBEDO_FLOOR = 0.01;
 // pixel half on a black square and half on a white one gets gray, and
 // multiplying it back in keeps texture edges as smooth as without denoising.
 fn albedoOf(record: PixelRecord) -> vec3f {
-  return max(record.albedo.rgb / sampleCount(), vec3f(ALBEDO_FLOOR));
+  return max(record.albedo.rgb / max(restCount(record), 1.0), vec3f(ALBEDO_FLOOR));
 }
 
 // A pixel center's position on the imaginary screen one unit in front of the
@@ -242,8 +261,8 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   let record = pixels[slot];
   let g = guideOf(id.xy, record);
   guideOut[slot] = packGuide(g);
-  let n = sampleCount();
-  let mean = record.light.rgb / n;
+  let n = restCount(record);
+  let mean = record.light.rgb / max(n, 1.0);
   if (g.depth >= NO_HIT) {
     illuminationOut[slot] = vec4f(mean, -1.0); // sky or a glowing surface: shown as it is
     return;
@@ -253,7 +272,7 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
   // light to average, and its pattern can't smear.
   let albedo = albedoOf(record);
   var variance: f32;
-  if (frame.sampleIndex + 1u >= MIN_SAMPLES_FOR_VARIANCE) {
+  if (n >= f32(MIN_SAMPLES_FOR_VARIANCE)) {
     // Variance of a sample = mean of squares - square of mean. The average
     // of n samples varies n times less, which is what the screen shows; so
     // the filter does less as the image refines. (n - 1, not n: Bessel's
@@ -293,7 +312,7 @@ fn neighborVariance(pixel: vec2u, size: vec2u, g: Guide) -> f32 {
         let like = likeness(c, guideOf(neighbor, record), neighbor, inverseSqrt(f32(dx * dx + dy * dy)));
         w = like.facing * exp(-like.difference);
       }
-      let l = luminance(record.light.rgb / sampleCount() / albedoOf(record));
+      let l = luminance(record.light.rgb / restCount(record) / albedoOf(record));
       weights += w;
       sum += w * l;
       sumOfSquares += w * l * l;
@@ -417,7 +436,8 @@ fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
   return vec4f(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 
-// The denoised image: the filtered illumination times the surface color.
+// The denoised image: the filtered illumination times the surface color,
+// blended with the noise-free samples as the tracer does.
 @fragment
 fn showDenoised(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   let slot = slotOf(vec2u(pixel.xy));
@@ -425,11 +445,11 @@ fn showDenoised(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
     return vec4f(0.0, 0.0, 0.0, 1.0);
   }
   let record = pixels[slot];
-  var color = record.light.rgb / sampleCount();
+  var restMean = record.light.rgb / max(restCount(record), 1.0);
   if (record.surface.w < NO_HIT) {
-    color = illuminationIn[slot].rgb * albedoOf(record);
+    restMean = illuminationIn[slot].rgb * albedoOf(record);
   }
-  return vec4f(encodeSrgb(toneMap(color)), 1.0);
+  return vec4f(screenColor(restMean, record.noiseFree, sampleCount()), 1.0);
 }
 
 // The plain average, as the tracer shows it: for turning the slider back to
@@ -440,5 +460,6 @@ fn showRaw(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   if (slot >= arrayLength(&pixels)) {
     return vec4f(0.0, 0.0, 0.0, 1.0);
   }
-  return vec4f(encodeSrgb(toneMap(pixels[slot].light.rgb / sampleCount())), 1.0);
+  let record = pixels[slot];
+  return vec4f(screenColor(record.light.rgb / max(restCount(record), 1.0), record.noiseFree, sampleCount()), 1.0);
 }

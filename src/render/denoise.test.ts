@@ -23,15 +23,16 @@ for (const start of [
   'fn luminance(',
   'fn toneMap(',
   'fn encodeSrgb(',
+  'fn screenColor(',
 ]) {
   test(`denoise.wgsl's copy of "${start}" matches tracer.wgsl`, () => {
     assert.equal(declaration(denoise, start), declaration(tracer, start));
   });
 }
 
-test('PixelRecord is three vec4f, as PIXEL_RECORD_BYTES says', () => {
+test('PixelRecord is four vec4f, as PIXEL_RECORD_BYTES says', () => {
   const fields = [...declaration(tracer, 'struct PixelRecord {').matchAll(/^ {2}\w+: (\w+),/gm)].map((m) => m[1]);
-  assert.deepEqual(fields, ['vec4f', 'vec4f', 'vec4f']);
+  assert.deepEqual(fields, ['vec4f', 'vec4f', 'vec4f', 'vec4f']);
   assert.equal(PIXEL_RECORD_BYTES, fields.length * 16);
 });
 

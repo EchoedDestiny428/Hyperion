@@ -3,8 +3,8 @@
 // them: the pass files import .wgsl files, which only Vite knows how to load.
 // denoise.test.ts checks them against the shaders.
 
-// struct PixelRecord in tracer.wgsl and denoise.wgsl: three vec4f.
-export const PIXEL_RECORD_BYTES = 48;
+// struct PixelRecord in tracer.wgsl and denoise.wgsl: four vec4f.
+export const PIXEL_RECORD_BYTES = 64;
 
 // The denoiser's illumination buffers: one vec4f per pixel.
 export const ILLUMINATION_BYTES_PER_PIXEL = 16;

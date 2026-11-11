@@ -236,6 +236,9 @@ var<private> rayCount: u32;
 //   glowing surfaces, whose light the camera sees directly, without noise.
 var<private> firstColor: vec3f;
 var<private> firstSurface: vec4f;
+// Whether the path tracer's camera ray went straight to a light or the sky,
+// with nothing in between: see isNoiseFree.
+var<private> directGlow: bool;
 
 // Polished metal: the path always reflects off it in one exact direction.
 fn isPerfectMirror(material: Material) -> bool {
@@ -1071,6 +1074,11 @@ fn tracePath(primary: Ray) -> vec3f {
       firstHitDistance = hit.t;
     }
     if (hit.t >= NO_HIT) {
+      // Only the camera ray counts: a path that met a light first and
+      // escaped later is still a direct view of that light.
+      if (bounce == 0u) {
+        directGlow = true;
+      }
       // The path escaped: the sky is a light source, so whatever it shows in
       // this direction is light arriving along the path.
       let disk = sunDisk(ray.dir, toSun) * bounceShare(bouncePdf, SUN_PDF);
@@ -1093,6 +1101,7 @@ fn tracePath(primary: Ray) -> vec3f {
         mirrors = mirrors * mirrorMatrix(facing);
       } else {
         seeking = false;
+        directGlow = bounce == 0u && any(material.emission != vec3f(0.0));
         if (all(material.emission == vec3f(0.0))) {
           firstColor = mirrorTint * color;
           firstSurface = vec4f(mirrors * facing, travelled);
@@ -1228,10 +1237,15 @@ fn heat(rays: f32) -> vec3f {
 // brightness squared, to work out how noisy the pixel still is, and what the
 // pixel shows (a "G-buffer": surface color, facing and distance). The copy of
 // this struct in denoise.wgsl must match (denoise.test.ts checks).
+//
+// Samples come in two kinds, totalled apart (see isNoiseFree and
+// screenColor): noise-free ones, whose camera ray went straight to a light or
+// the sky, and the rest. The rest is what the denoiser works on.
 struct PixelRecord {
-  light: vec4f, // rgb: running total of light (or a debug view's value); a: of luminance(light)²
-  albedo: vec4f, // rgb: running total of the first surface's color (firstColor); a: unused
-  surface: vec4f, // firstSurface from sample 0, whose ray goes through the pixel's center
+  light: vec4f, // the rest: rgb, running total of light (or a debug view's value); a, of luminance(light)²
+  albedo: vec4f, // the rest: rgb, running total of the first surface's color (firstColor); a, 1 once surface is set
+  surface: vec4f, // firstSurface from the first sample that hit a surface (usually sample 0, through the center)
+  noiseFree: vec4f, // the noise-free samples: rgb, running total of their screen colors (toneMap); a, how many
 }
 
 @group(0) @binding(4) var<storage, read_write> pixels: array<PixelRecord>;
@@ -1259,6 +1273,51 @@ fn encodeSrgb(linear: vec3f) -> vec3f {
   let low = linear * 12.92;
   let high = 1.055 * pow(linear, vec3f(1.0 / 2.4)) - 0.055;
   return select(high, low, linear <= vec3f(0.0031308));
+}
+
+// ---- Bright edges --------------------------------------------------------
+// Averaging light and then tone mapping is right for noise, but crushes the
+// edge of anything very bright. A ceiling panel is ~13 times as bright as the
+// ceiling, so a pixel a quarter covered by it averages to 1.1, which tone
+// mapping shows at 80% of white: the panel's soft edge collapses into one
+// pixel, and an edge at an angle becomes a staircase. Averaging screen colors
+// instead gives a true blend, a quarter of the way from ceiling to panel, as
+// a game's anti-aliasing would. But doing that for noisy samples would darken
+// them: tone mapping is a curve, and the average of a curve's values isn't
+// the curve at the average (Jensen's inequality). So it's done only for
+// samples with no noise in them. Games use a related trick, the "Karis
+// resolve"; offline renderers such as V-Ray call it sub-pixel mapping.
+//
+// It has a cost: averaging screen colors caps each sample at white, so a
+// glint smaller than a pixel loses the light that made it show. Tried on
+// everything that reaches a light, the pink and white glints on neon-night's
+// chrome balls all but vanished. So it's only for lights and sky the camera
+// sees directly, which are large enough to have edges.
+
+// Whether this sample's value came out the same whatever the random numbers
+// were, apart from where in the pixel it landed, and should be averaged as a
+// screen color: the path tracer's camera ray went straight to a light or the
+// sky. Only for the final image (debug views aren't light), and not for the
+// Whitted renderer, whose glints in mirrors would fade the same way.
+fn isNoiseFree() -> bool {
+  return frame.view == VIEW_FINAL && frame.renderer == RENDERER_PATH && directGlow;
+}
+
+// A pixel's color for the screen, over `count` samples: the noise-free ones'
+// average screen color and the rest's average light, tone mapped, blended by
+// how many samples each has. `restMean` is the rest's average light (maybe
+// denoised). With no noise-free samples, it's just the tone-mapped average.
+// denoise.wgsl has a copy (denoise.test.ts checks they match).
+fn screenColor(restMean: vec3f, noiseFree: vec4f, count: f32) -> vec3f {
+  if (noiseFree.a == 0.0) {
+    return encodeSrgb(toneMap(restMean));
+  }
+  let rest = count - noiseFree.a;
+  var sum = noiseFree.rgb;
+  if (rest > 0.0) {
+    sum += rest * toneMap(restMean);
+  }
+  return encodeSrgb(sum / count);
 }
 
 @fragment
@@ -1296,6 +1355,7 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   rayCount = 0u;
   firstColor = vec3f(0.0);
   firstSurface = vec4f(0.0, 0.0, 0.0, NO_HIT);
+  directGlow = false;
   var value: vec3f;
   if (frame.view == VIEW_FINAL || frame.view == VIEW_RAYS) {
     var light: vec3f;
@@ -1309,31 +1369,54 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
     value = debugView(ray);
   }
 
-  // Add the value to the pixel's running total and show the average. For
-  // the final image the average is taken before tone mapping: averaging
-  // light, not finished screen colors, is what makes a half-covered edge
-  // pixel look right.
+  // Add the value to the pixel's running totals and show the average: a
+  // noise-free sample's screen color to one total, the rest's light to the
+  // other (PixelRecord, screenColor).
+  // Every sample reads and writes its pixel's record, and on a fast GPU that
+  // memory traffic is a real share of a light scene's time, so this touches
+  // only what changes.
+  let noiseFree = isNoiseFree();
   var total = vec4f(value, luminance(value) * luminance(value));
-  var albedoTotal = vec4f(firstColor, 0.0);
+  var noiseFreeTotal = vec4f(0.0);
+  if (noiseFree) {
+    noiseFreeTotal = vec4f(toneMap(value), 1.0);
+    total = vec4f(0.0);
+  }
+  let foundSurface = select(0.0, 1.0, firstSurface.w < NO_HIT);
+  var albedoTotal = vec4f(firstColor, foundSurface);
   var count = 1.0;
   let slot = pixelIndex.y * u32(frame.resolution.x) + pixelIndex.x;
   if (slot < arrayLength(&pixels)) {
     if (frame.sampleIndex > 0u) {
       total += pixels[slot].light;
-      albedoTotal += pixels[slot].albedo;
+      let earlier = pixels[slot].albedo;
+      albedoTotal = vec4f(albedoTotal.rgb + earlier.rgb, max(earlier.a, foundSurface));
+      noiseFreeTotal += pixels[slot].noiseFree;
       count = f32(frame.sampleIndex + 1u);
+      // Where the center ray hit a light, the denoiser still needs the
+      // surface beside it, from the first jittered ray that found it.
+      if (foundSurface > earlier.a) {
+        pixels[slot].surface = firstSurface;
+      }
     } else {
-      pixels[slot].surface = firstSurface; // the center ray's; later samples are jittered
+      pixels[slot].surface = firstSurface;
     }
     pixels[slot].light = total;
     pixels[slot].albedo = albedoTotal;
+    if (noiseFree || frame.sampleIndex == 0u) {
+      pixels[slot].noiseFree = noiseFreeTotal;
+    }
   }
-  var color = total.rgb / count;
 
-  // Only the final image is light that needs converting for the screen.
   if (frame.view == VIEW_FINAL) {
-    color = encodeSrgb(toneMap(color));
-  } else if (frame.view == VIEW_RAYS) {
+    // A pixel whose samples all hit surfaces (most of them) has rest = count,
+    // so this is exactly the plain average, tone mapped, as in C1.
+    let rest = count - noiseFreeTotal.a;
+    return vec4f(screenColor(total.rgb / max(rest, 1.0), noiseFreeTotal, count), 1.0);
+  }
+  // The debug views are averaged as they are: they're not light.
+  var color = total.rgb / count;
+  if (frame.view == VIEW_RAYS) {
     color = heat(color.x); // the average number of rays per sample
   }
   return vec4f(color, 1.0);
