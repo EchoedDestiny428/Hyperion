@@ -33,7 +33,12 @@ struct Frame {
   sampleIndex: u32, // samples already in the running total; 0 = start over
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
   exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
-  // WGSL rounds the struct up to 96 bytes, a multiple of 16.
+  // The camera the last frame was drawn with, to find where each point was
+  // on screen then (its motion vector). The same as above while it's still.
+  previousCameraPos: vec3f,
+  previousCameraRight: vec3f,
+  previousCameraUp: vec3f,
+  previousCameraForward: vec3f,
 }
 
 struct PixelRecord {

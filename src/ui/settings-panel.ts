@@ -30,6 +30,7 @@ const VIEW_TEXT: Record<View, string> = {
   distance: 'Distance',
   sunlight: 'Sunlight',
   rays: 'Rays per pixel',
+  motion: 'Motion vectors',
 };
 
 const PACE_TEXT: Record<Pace, string> = {

@@ -11,9 +11,13 @@ import type { CameraBasis } from '../camera/orbit.ts';
 //                        12..14 cameraForward 15 renderer (u32)
 //                        16..17 resolution   18 view (u32)   19 sampleIndex (u32)
 //                        20 maxBounces (u32)  21 exposure  22..23 padding
-// A uniform struct's size rounds up to a multiple of 16 bytes, so the two
-// values after the first 80 bytes take 16.
-export const FRAME_UNIFORM_FLOATS = 24; // = 96 bytes
+//                        24..26 previousCameraPos      27 padding
+//                        28..30 previousCameraRight    31 padding
+//                        32..34 previousCameraUp       35 padding
+//                        36..38 previousCameraForward  39 padding
+// A vec3f starts on a 16-byte boundary, and a uniform struct's size rounds up
+// to a multiple of 16 bytes, hence the padding.
+export const FRAME_UNIFORM_FLOATS = 40; // = 160 bytes
 
 export interface FrameParams {
   camera: CameraBasis;
@@ -26,6 +30,7 @@ export interface FrameParams {
   sampleIndex: number; // samples already in the running total; 0 = start over (accumulation.ts)
   maxBounces: number; // path tracer: the most surfaces one path visits
   exposure: number; // in stops: each one doubles the light before tone mapping
+  previousCamera: CameraBasis; // the last frame's camera; `camera` again on the first frame
 }
 
 export function packFrameUniforms(
@@ -52,5 +57,9 @@ export function packFrameUniforms(
   // The shader wants the multiplier. 2^0 is exactly 1, so at 0 stops the
   // picture is exactly what it was without exposure.
   out[21] = 2 ** p.exposure;
+  out.set(p.previousCamera.position, 24);
+  out.set(p.previousCamera.right, 28);
+  out.set(p.previousCamera.up, 32);
+  out.set(p.previousCamera.forward, 36);
   return out;
 }

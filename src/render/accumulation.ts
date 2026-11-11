@@ -17,8 +17,9 @@ export const MAX_SAMPLES = 1024;
 export type Pace = 'full' | 'slow' | 'step';
 export const SLOW_PACE_MS = 250; // 4 samples per second
 
-// Everything the image depends on, apart from which sample this is.
-export type ImageInputs = Omit<FrameParams, 'sampleIndex'>;
+// Everything the image depends on, apart from which sample this is. The
+// last frame's camera isn't part of the picture, only of how it got there.
+export type ImageInputs = Omit<FrameParams, 'sampleIndex' | 'previousCamera'>;
 
 export interface SampleCounter {
   readonly held: number; // samples in the running total

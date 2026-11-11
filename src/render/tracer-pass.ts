@@ -24,8 +24,9 @@ export interface TracerPass {
     scene: Scene,
     timestampWrites?: GPURenderPassTimestampWrites,
   ): void;
-  // What the last encode() wrote. Null before the first one, and when the
-  // canvas is too big for the records (see createRecords).
+  // What the last encode() wrote (the copy of the records it wrote). Null
+  // before the first one, and when the canvas is too big for the records
+  // (see createRecords).
   output(): TracerOutput | null;
 }
 
@@ -42,11 +43,14 @@ interface SceneBuffers {
 }
 
 // The running totals and G-buffer, one PixelRecord per pixel.
+// The running totals and G-buffer, one PixelRecord per pixel, in two copies
+// that take turns: each frame reads one and writes the other (see the
+// Accumulation section of tracer.wgsl).
 interface Records {
   width: number;
   height: number;
-  buffer: GPUBuffer;
-  complete: boolean; // false if the canvas was too big and it holds a single record
+  buffers: [GPUBuffer, GPUBuffer];
+  complete: boolean; // false if the canvas was too big and each holds a single record
 }
 
 // Everything here is created once, except the scene's buffers and the
@@ -78,34 +82,45 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
 
   let sceneBuffers: SceneBuffers | null = null;
   let records: Records | null = null;
-  let bindGroup: GPUBindGroup | null = null; // points the shader at all of the above
+  // Point the shader at all of the above: [i] reads records.buffers[i] and
+  // writes the other.
+  let bindGroups: [GPUBindGroup, GPUBindGroup] | null = null;
+  let written = 1; // which copy the last frame wrote
 
   return {
     encode(encoder, target, params, scene, timestampWrites) {
       if (sceneBuffers?.scene !== scene) {
         sceneBuffers = uploadScene(device, scene, sceneBuffers);
-        bindGroup = null;
+        bindGroups = null;
       }
       if (records?.width !== params.width || records.height !== params.height) {
         records = createRecords(device, params.width, params.height, records);
-        bindGroup = null;
+        bindGroups = null;
       }
       // The binding numbers match the @binding(n) declarations in tracer.wgsl.
-      bindGroup ??= device.createBindGroup({
-        label: `tracer · ${scene.name}`,
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: uniformBuffer } },
-          { binding: 1, resource: { buffer: sceneBuffers.info } },
-          { binding: 2, resource: { buffer: sceneBuffers.spheres } },
-          { binding: 3, resource: { buffer: sceneBuffers.materials } },
-          { binding: 4, resource: { buffer: records.buffer } },
-          { binding: 5, resource: { buffer: sceneBuffers.boxes } },
-          { binding: 6, resource: { buffer: sceneBuffers.lights } },
-          { binding: 7, resource: { buffer: sceneBuffers.bvhNodes } },
-          { binding: 8, resource: { buffer: sceneBuffers.bvhItems } },
-        ],
-      });
+      const scenePart = sceneBuffers;
+      const copies = records.buffers;
+      const group = (read: 0 | 1): GPUBindGroup =>
+        device.createBindGroup({
+          label: `tracer · ${scene.name} · reads copy ${read}`,
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: uniformBuffer } },
+            { binding: 1, resource: { buffer: scenePart.info } },
+            { binding: 2, resource: { buffer: scenePart.spheres } },
+            { binding: 3, resource: { buffer: scenePart.materials } },
+            { binding: 4, resource: { buffer: copies[read] } },
+            { binding: 5, resource: { buffer: scenePart.boxes } },
+            { binding: 6, resource: { buffer: scenePart.lights } },
+            { binding: 7, resource: { buffer: scenePart.bvhNodes } },
+            { binding: 8, resource: { buffer: scenePart.bvhItems } },
+            { binding: 9, resource: { buffer: copies[read === 0 ? 1 : 0] } },
+          ],
+        });
+      bindGroups ??= [group(0), group(1)];
+      // Read what the last frame wrote, and write the other copy.
+      const read = written === 0 ? 0 : 1;
+      written = read === 0 ? 1 : 0;
 
       // writeBuffer is scheduled on the queue and completes before any
       // command buffer submitted after it, so this frame's draw sees these values.
@@ -118,13 +133,18 @@ export function createTracerPass(device: GPUDevice, format: GPUTextureFormat): T
         timestampWrites, // undefined counts as not given
       });
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bindGroup);
+      pass.setBindGroup(0, bindGroups[read]);
       pass.draw(3); // the full-screen triangle; the shader computes its corners
       pass.end();
     },
     output() {
       if (!records?.complete) return null;
-      return { frame: uniformBuffer, pixels: records.buffer, width: records.width, height: records.height };
+      return {
+        frame: uniformBuffer,
+        pixels: records.buffers[written === 0 ? 0 : 1],
+        width: records.width,
+        height: records.height,
+      };
     },
   };
 }
@@ -158,7 +178,7 @@ function uploadScene(device: GPUDevice, scene: Scene, previous: SceneBuffers | n
 // The records need no initial contents: the first sample after any change
 // overwrites them rather than adding to them.
 function createRecords(device: GPUDevice, width: number, height: number, previous: Records | null): Records {
-  previous?.buffer.destroy();
+  for (const buffer of previous?.buffers ?? []) buffer.destroy();
   let size = width * height * PIXEL_RECORD_BYTES;
   const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
   const complete = size <= limit;
@@ -170,6 +190,7 @@ function createRecords(device: GPUDevice, width: number, height: number, previou
     );
     size = PIXEL_RECORD_BYTES; // a single record; the shader then skips accumulating
   }
-  const buffer = device.createBuffer({ label: `pixel records ${width}×${height}`, size, usage: GPUBufferUsage.STORAGE });
-  return { width, height, buffer, complete };
+  const copy = (i: number): GPUBuffer =>
+    device.createBuffer({ label: `pixel records ${i} ${width}×${height}`, size, usage: GPUBufferUsage.STORAGE });
+  return { width, height, buffers: [copy(0), copy(1)], complete };
 }

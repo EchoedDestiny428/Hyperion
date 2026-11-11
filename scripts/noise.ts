@@ -26,7 +26,8 @@ import { parseArgs } from 'node:util';
 import { SAMPLE_LIMITS } from '../src/render/accumulation.ts';
 import { MAX_DENOISE_LEVEL } from '../src/render/settings.ts';
 import { SCENES } from '../src/scene/registry.ts';
-import { type Page, openScene, pick, powerState, serve, sleep, slide, startBrowser, waitForHud } from './browser.ts';
+import { type Page, captureCanvas, openScene, pick, powerState, serve, sleep, slide, startBrowser, waitForHud } from './browser.ts';
+import { errorCells } from './compare.ts';
 import { type Picture, decodePng, rmsDifference } from './image.ts';
 
 const WIDTH = 640;
@@ -50,23 +51,11 @@ async function render(page: Page, url: string, scene: string, samples: number, d
   await slide(page, 'Denoise', denoise);
   await sleep(HUD_REFRESH_MS); // so the HUD no longer shows the count from before the change
   await waitForHud(page, label, (r) => r.sampleLimit === samples && r.samples >= samples);
-  await page.evaluate(`for (const id of ['hud', 'settings', 'scene-picker']) document.getElementById(id).style.display = 'none'`);
-  await sleep(HUD_REFRESH_MS);
-  const shot = await page.send('Page.captureScreenshot', { format: 'png' });
-  const png = Buffer.from(String(shot['data']), 'base64');
+  const png = await captureCanvas(page);
   return { png, picture: decodePng(png) };
 }
 
 const value = (error: number): string => error.toFixed(2);
-
-// "−29%, 2.0× the samples": a picture with 29% less error is as clean as one
-// with 2× the samples would be, since error falls with the square root of the
-// sample count.
-function change(before: number, after: number): string {
-  const percent = (after / before - 1) * 100;
-  const samples = (before / after) ** 2;
-  return `${percent > 0 ? '+' : ''}${percent.toFixed(1)}%, ${samples.toFixed(2)}× the samples`;
-}
 
 async function main(): Promise<void> {
   const { values } = parseArgs({
@@ -132,10 +121,8 @@ async function main(): Promise<void> {
           await keep(shot, `${scene}-${count}-${column.title.toLowerCase().replace(/ /g, '')}`);
           cells.push(rmsDifference(shot.picture, reference.picture));
         }
-        const first = cells[0] ?? Number.NaN;
-        const text = cells.map((error, i) => (i === 0 ? value(error) : `${value(error)} (${change(first, error)})`));
-        rows.push(`| ${scene} | ${count} | ${text.join(' | ')} |`);
-        errors.push({ before: first, after: cells[1] ?? Number.NaN });
+        rows.push(`| ${scene} | ${count} | ${errorCells(cells).join(' | ')} |`);
+        errors.push({ before: cells[0] ?? Number.NaN, after: cells[1] ?? Number.NaN });
       }
       if (before) {
         // If the new build draws the same picture with less noise, its own

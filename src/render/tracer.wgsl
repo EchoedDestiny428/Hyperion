@@ -24,7 +24,12 @@ struct Frame {
   sampleIndex: u32, // samples already in the running total; 0 = start over
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
   exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
-  // WGSL rounds the struct up to 96 bytes, a multiple of 16.
+  // The camera the last frame was drawn with, to find where each point was
+  // on screen then (its motion vector). The same as above while it's still.
+  previousCameraPos: vec3f,
+  previousCameraRight: vec3f,
+  previousCameraUp: vec3f,
+  previousCameraForward: vec3f,
 }
 
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -43,6 +48,7 @@ const VIEW_NORMALS = 2u;
 const VIEW_DISTANCE = 3u;
 const VIEW_SUNLIGHT = 4u;
 const VIEW_RAYS = 5u;
+const VIEW_MOTION = 6u;
 
 // ---- Full-screen triangle ------------------------------------------------
 // One triangle with corners (-1,-1), (3,-1), (-1,3) covers all of clip space
@@ -1200,6 +1206,10 @@ fn debugView(primary: Ray) -> vec3f {
   for (var bounce = 0; bounce < MAX_MIRROR_BOUNCES; bounce++) {
     let hit = intersectScene(ray);
     if (hit.t >= NO_HIT) {
+      if (frame.view == VIEW_MOTION) {
+        // The sky is infinitely far away, so only turning moves it.
+        return motionColor(primary.origin + primary.dir * 1e6);
+      }
       return select(vec3f(0.0), tint * sky(ray.dir, toSun, true), frame.view == VIEW_COLOR);
     }
     travelled += hit.t;
@@ -1219,12 +1229,56 @@ fn debugView(primary: Ray) -> vec3f {
       case VIEW_DISTANCE: {
         return vec3f(exp(-travelled * 0.1)); // near is bright, far fades to black
       }
+      case VIEW_MOTION: {
+        // In a mirror, what moves is the mirror image: the point as far along
+        // the camera ray as the reflected path is long (see firstSurface).
+        return motionColor(primary.origin + primary.dir * travelled);
+      }
       default: {
         return sunlightView(hit, toSun);
       }
     }
   }
   return vec3f(0.0);
+}
+
+// ---- Motion vectors ------------------------------------------------------
+// Where a point lands on screen for a camera, in pixels from the top-left
+// corner, y down: the inverse of how fs() aims a ray through a pixel.
+// camera/project.ts has a copy for tests.
+fn projectToPixel(point: vec3f, position: vec3f, right: vec3f, up: vec3f, forward: vec3f) -> vec2f {
+  let d = point - position;
+  let depth = max(dot(d, forward), 1e-6); // behind the camera only happens for points that just came into view
+  let ndc = vec2f(
+    dot(d, right) / (depth * frame.tanHalfFovY * frame.aspect),
+    dot(d, up) / (depth * frame.tanHalfFovY),
+  );
+  return vec2f((ndc.x + 1.0) * 0.5, (1.0 - ndc.y) * 0.5) * frame.resolution;
+}
+
+// How far, in pixels, a point moved on screen since the last frame: where it
+// is now minus where it was. Reusing last frame's samples means looking up
+// each pixel's point at "where it was".
+fn motionVector(point: vec3f) -> vec2f {
+  let now = projectToPixel(point, frame.cameraPos, frame.cameraRight, frame.cameraUp, frame.cameraForward);
+  let then = projectToPixel(
+    point,
+    frame.previousCameraPos,
+    frame.previousCameraRight,
+    frame.previousCameraUp,
+    frame.previousCameraForward,
+  );
+  return now - then;
+}
+
+// VIEW_MOTION: the direction a point moved as a hue (right red, down
+// yellow-green, left cyan, up violet), and how far as brightness: black for
+// still, half bright at about 3 pixels a frame.
+fn motionColor(point: vec3f) -> vec3f {
+  let m = motionVector(point);
+  let hue = (atan2(m.y, m.x) / (2.0 * PI)) + 1.0;
+  let rgb = clamp(abs(fract(hue + vec3f(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, vec3f(0.0), vec3f(1.0));
+  return rgb * (1.0 - exp(-length(m) / 4.0));
 }
 
 // VIEW_RAYS, on a doubling scale: 1 ray blue, 2 teal, 4 green, 8 yellow,
@@ -1247,6 +1301,14 @@ fn heat(rays: f32) -> vec3f {
 // follows the canvas (tracer-pass.ts). If the canvas is too big for one
 // buffer, it holds a single record and the image doesn't refine.
 //
+// There are two copies, which take turns: each frame reads last frame's
+// (`history`) and writes a new one (`pixels`). While the camera stands still
+// each pixel reads only its own record, and one copy would do. Once the
+// camera moves, a pixel will read its record from wherever its point was
+// last frame (C2's temporal steps), so it mustn't overwrite records that its
+// neighbors are still reading: hence two, like a game's double-buffered
+// screen ("ping-pong").
+//
 // Besides the running total of light, each record keeps what the denoiser
 // (denoise.wgsl) needs to tell noise from detail: the sum of each sample's
 // brightness squared, to work out how noisy the pixel still is, and what the
@@ -1263,7 +1325,11 @@ struct PixelRecord {
   noiseFree: vec4f, // the noise-free samples: rgb, running total of their screen colors (toneMap); a, how many
 }
 
-@group(0) @binding(4) var<storage, read_write> pixels: array<PixelRecord>;
+@group(0) @binding(4) var<storage, read> history: array<PixelRecord>;
+// 9 is the last binding a fragment shader can have by default: WebGPU allows
+// 8 storage buffers per shader stage (maxStorageBuffersPerShaderStage), and
+// this is the 8th. https://www.w3.org/TR/webgpu/#limits
+@group(0) @binding(9) var<storage, read_write> pixels: array<PixelRecord>;
 
 // How bright a color looks: green counts most, blue least (Rec. 709 weights).
 // https://en.wikipedia.org/wiki/Relative_luminance
@@ -1391,9 +1457,6 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   // Add the value to the pixel's running totals and show the average: a
   // noise-free sample's screen color to one total, the rest's light to the
   // other (PixelRecord, screenColor).
-  // Every sample reads and writes its pixel's record, and on a fast GPU that
-  // memory traffic is a real share of a light scene's time, so this touches
-  // only what changes.
   let noiseFree = isNoiseFree();
   var total = vec4f(value, luminance(value) * luminance(value));
   var noiseFreeTotal = vec4f(0.0);
@@ -1406,25 +1469,21 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   var count = 1.0;
   let slot = pixelIndex.y * u32(frame.resolution.x) + pixelIndex.x;
   if (slot < arrayLength(&pixels)) {
+    var surface = firstSurface;
     if (frame.sampleIndex > 0u) {
-      total += pixels[slot].light;
-      let earlier = pixels[slot].albedo;
-      albedoTotal = vec4f(albedoTotal.rgb + earlier.rgb, max(earlier.a, foundSurface));
-      noiseFreeTotal += pixels[slot].noiseFree;
+      let earlier = history[slot];
+      total += earlier.light;
+      albedoTotal = vec4f(albedoTotal.rgb + earlier.albedo.rgb, max(earlier.albedo.a, foundSurface));
+      noiseFreeTotal += earlier.noiseFree;
       count = f32(frame.sampleIndex + 1u);
-      // Where the center ray hit a light, the denoiser still needs the
-      // surface beside it, from the first jittered ray that found it.
-      if (foundSurface > earlier.a) {
-        pixels[slot].surface = firstSurface;
+      // Keep the surface found first. Where the center ray hit a light, the
+      // denoiser still needs the surface beside it, from the first jittered
+      // ray that found it.
+      if (foundSurface <= earlier.albedo.a) {
+        surface = earlier.surface;
       }
-    } else {
-      pixels[slot].surface = firstSurface;
     }
-    pixels[slot].light = total;
-    pixels[slot].albedo = albedoTotal;
-    if (noiseFree || frame.sampleIndex == 0u) {
-      pixels[slot].noiseFree = noiseFreeTotal;
-    }
+    pixels[slot] = PixelRecord(total, albedoTotal, surface, noiseFreeTotal);
   }
 
   if (frame.view == VIEW_FINAL) {

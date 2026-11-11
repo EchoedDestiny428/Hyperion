@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "node --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
     "benchmark": "npm run build && node scripts/benchmark.ts",
-    "noise": "npm run build && node scripts/noise.ts"
+    "noise": "npm run build && node scripts/noise.ts",
+    "motion": "npm run build && node scripts/motion.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

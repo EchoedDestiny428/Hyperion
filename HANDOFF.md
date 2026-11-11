@@ -20,11 +20,11 @@ For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of
 
 Each needing approval first:
 
-1. The temporal steps (C2 steps 2–5 in `docs/PLAN.md`): two history buffers, reprojection, rejecting history that doesn't match, fading history. The G-buffer they need is already in the per-pixel records.
+1. The temporal steps, in the order under "Order of the temporal steps" in `docs/PLAN.md`. Session 1 (groundwork) is done; next is session 2, reprojection and rejection. Measure every step with `npm run motion` against the baseline below.
 2. Optional, for the denoiser: glossy reflections and glass, which it still smooths as part of the surface they're seen on (steps 6 and 7); and fireflies, which it spreads into blobs.
 3. Optional: retest "any hit" shadow rays now that there's a BVH, since a shadow ray could stop walking the tree at its first blocker.
 
-Done since the last update: the denoiser. The first version made the checkerboard scenes *worse*; measuring block by block found why (section 8 of the C2 note). Keep measuring every filter change with `npm run noise -- --denoise 0,1,2,3,4,5 --save <folder>` and look at the pictures, since a smoother picture can be further from the truth.
+Done since the last update: the temporal groundwork. That's `?spin=` and `?turn=` (`camera/spin.ts`), `npm run motion`, last frame's camera in `struct Frame`, the Motion vectors view, and two copies of the per-pixel records that take turns. Before that: the denoiser. The first version made the checkerboard scenes *worse*; measuring block by block found why (section 8 of the C2 note). Keep measuring every filter change with `npm run noise -- --denoise 0,1,2,3,4,5 --save <folder>` and look at the pictures, since a smoother picture can be further from the truth.
 
 The fly camera's pointer lock, walking and collisions come later in C2, once the image stays clean while moving.
 
@@ -108,6 +108,8 @@ Laptop (Intel Iris Xe, plugged in), path tracer, p50 per sample. Visible-face li
 
 Denoiser (2026-11-10), `npm run noise`, 640×400, error against an undenoised 1,024-sample reference, 2 passes: `dreamspace` −69% / −72% / −65% at 4 / 16 / 64 samples, `cornell-box` −74% / −73% / −63%, `material-test` −57% / −49% / −31%, the open-air scenes −3% to −39%. The full table is in section 8 of `docs/learn/C2.md`. At slider 0 the picture is byte-identical to before. Cost on the laptop (Iris Xe, battery), `dreamspace`, path, 1280×800: the bigger per-pixel records cost nothing measurable (−0.3%, not clear). The first denoiser added 49 ms per frame at 2 passes (117 to 166 ms) and 90 ms at 5. Now it filters only when the samples grow by a tenth, so a typical refining frame costs the same as without it. A filter (every frame, while the view changes) costs about 10 ms per pass on `shadow-heights`, down from 14, after packing a 16-byte guide and cutting the per-neighbor math. What's left is about half arithmetic, half memory reads (section 9 of the C2 note). On the RTX 4060 (laptop, plugged in), the per-pixel records make light scenes' samples about 0.2 ms (+24%) slower than before the denoiser; heavy scenes show no clear change. Leaner records are an option if that ever matters.
 
+Moving views, `npm run motion` (`motion-test`, 640×400, 0.5° per frame, against a still 1,024-sample picture of the same view), baseline before any temporal reuse (2026-11-11): error 17.3 / 15.6 at frames 20 / 60, 6.2 / 5.6 with Denoise 2. That's the same as a single still sample, as it should be, since every moving frame starts over. The two copies of the records cost light scenes 0.1 to 0.35 ms per sample on the RTX 4060 (+16% to +34%); heavier scenes show no clear change.
+
 Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
 
 ## Where things live
@@ -133,6 +135,9 @@ Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no g
 - **The room's sun depends on `sunDirection()`.** `dreamspace` is laid out so the sun lands on the deck, not the water, which blocks shadow rays. Changing the sun's direction, or ticking "Sun moves", changes that. Each scene can now place its sun (`sunElevation`, `sunAzimuth` in `Environment`); left out, it's the old 42° from +x, exactly.
 - **`firstSurface.w = NO_HIT` means "don't denoise",** not only "sky": glowing surfaces get it too. Perfect mirrors (metallic 1, polished) are looked through: the record holds what they show, as a mirror image.
 - **Lights and sky the camera sees directly are averaged as screen colors** (`isNoiseFree`, `screenColor` in `tracer.wgsl`), so their edges don't step. Everything else is averaged as light, as before. So since this change, slider-0 pictures differ from older builds at those edges (about 1,200 pixels in the dreamspace), so compare noise only against a build from after it, and nowhere else. Don't extend it to light seen through mirrors: tiny glints vanish (section 10 of the C2 note).
+- **Moving frames all use the same random numbers today.** The seed comes from the pixel and `sampleIndex`, and every moving frame restarts at sample 0, so each one gets the same noise pattern. Before reusing history (session 2), the seed must also change from frame to frame, or old and new samples will share their noise and averaging won't cancel it.
+- **The tracer's fragment shader has 8 storage buffers, the most WebGPU allows by default** (`maxStorageBuffersPerShaderStage`). Another one means requesting a higher limit in `createDevice` (most GPUs allow more) or merging buffers.
+- **`?spin=0.5&frames=60`** turns the orbit camera 0.5° per frame after P is pressed, and holds the 60th frame without refining it; `?turn=30` starts turned. The page marks progress in `#view`'s `data-spin` (`ready`, `turning`, `done`), which `scripts/motion.ts` waits on.
 - **The benchmark pins the Denoise slider** (`--denoise`, default 0) in both builds, so its times stay the tracer's own unless asked. Builds from before the slider simply don't denoise.
 - **Only the listed sample counts work when driving the page.** The Samples menu offers 1, 4, 16, 64, 256 and 1,024. Setting any other value from a script leaves a very noisy image, which looks like a rendering bug.
 

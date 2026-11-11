@@ -162,10 +162,29 @@ export async function serve(outDir: string, missing: string): Promise<{ url: str
 }
 
 // Opens a scene in a fresh page, so nothing from the last one carries over.
-export async function openScene(page: Page, url: string, scene: string): Promise<void> {
+// `options` adds to the address, such as { spin: '0.5' } (camera/spin.ts).
+export async function openScene(page: Page, url: string, scene: string, options: Record<string, string> = {}): Promise<void> {
   const loaded = page.waitFor('Page.loadEventFired');
-  await page.send('Page.navigate', { url: `${url}?scene=${scene}` });
+  const query = new URLSearchParams({ scene, ...options });
+  await page.send('Page.navigate', { url: `${url}?${query}` });
   await loaded;
+}
+
+// Screenshots the canvas alone: the HUD and menus are hidden first. Hiding
+// them only changes the page, not what the canvas shows, so it can't trigger
+// another frame of rendering.
+export async function captureCanvas(page: Page): Promise<Buffer> {
+  await page.evaluate(`for (const id of ['hud', 'settings', 'scene-picker']) document.getElementById(id).style.display = 'none'`);
+  await sleep(300); // a little longer than the HUD's update interval
+  const shot = await page.send('Page.captureScreenshot', { format: 'png' });
+  return Buffer.from(String(shot['data']), 'base64');
+}
+
+// Presses and lets go of a key, by its code ('KeyP'), as a person would.
+export async function pressKey(page: Page, code: string, key: string, keyCode: number): Promise<void> {
+  for (const type of ['keyDown', 'keyUp']) {
+    await page.send('Input.dispatchKeyEvent', { type, code, key, windowsVirtualKeyCode: keyCode });
+  }
 }
 
 // Sets one of the Renderer panel's menus, by the text its label starts with.

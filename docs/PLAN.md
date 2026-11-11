@@ -139,6 +139,22 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 
 At 2 passes every scene gets cleaner, rooms the most: the dreamspace has 72% less error at 16 samples, as clean as 13× the samples. See `docs/learn/C2.md`, section 8. Glass, water and glossy reflections are still smoothed as part of the surface they're seen on (steps 6 and 7).
 
+Also done along the way:
+- smooth edges on lights and sky seen directly;
+- Bounces and Exposure sliders;
+- a sun per scene;
+- the `motion-test` scene.
+
+**Order of the temporal steps** (decided 2026-11-11), each a working session:
+1. *Groundwork* (done 2026-11-11): a repeatable camera path (`?spin=`, `?turn=`) and `npm run motion` with the baseline error of moving views; last frame's camera and a motion-vector view (for step 3); two copies of the per-pixel records (step 2).
+2. *Reprojection and rejection* (steps 3–4): moving the camera stops restarting the image; per-pixel sample counts; a history-length view.
+3. *Fading history* (step 5), with a History slider, and the HUD, Samples menu and Pace reworked for per-pixel counts.
+4. *The denoiser on moving views:* variance from each pixel's history; *proposed:* feeding the first filter pass back into history, if `npm run motion` says it helps.
+5. *Responding to change* (step 8): variance clipping, and "Sun moves" keeping history.
+6. *Wrap-up:* the remaining debug views (step 10), the learning note, and whether glossy reflections and glass (steps 6–7) come next.
+
+Several samples per frame comes after session 3, since it depends on per-pixel counts.
+
 **Steps** (first draft):
 1. **A G-buffer:** for each pixel, keep the distance and normal of the surface the camera ray hit, next to the running total. The debug views already compute both.
 2. **Two history buffers,** swapped each frame: read last frame's, write this frame's. Today's single buffer only works because each pixel reads its own slot; after reprojection, pixels read each other's.

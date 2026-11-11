@@ -22,6 +22,7 @@ export const VIEWS = {
   distance: 3, // how far the ray travelled
   sunlight: 4, // lit, cast shadow, or facing away from the sun
   rays: 5, // how many rays the pixel cost
+  motion: 6, // how far and which way each point moved on screen since the last frame
 } as const;
 
 export type View = keyof typeof VIEWS;

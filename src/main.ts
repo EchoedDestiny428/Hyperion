@@ -2,7 +2,8 @@
 // render every frame. If the device is lost, start over.
 
 import { type Fly, attachFlyControls, flyBasis, flyFromOrbit, moveFly, orbitFromFly } from './camera/fly.ts';
-import { type Orbit, attachOrbitControls, orbitBasis, spinOrbit } from './camera/orbit.ts';
+import { type CameraBasis, type Orbit, attachOrbitControls, orbitBasis, spinOrbit } from './camera/orbit.ts';
+import { parseSpin, spinYaw } from './camera/spin.ts';
 import { trackCanvasSize } from './gpu/canvas.ts';
 import { createDevice, describeAdapter, shouldRestart } from './gpu/device.ts';
 import { createGpuTimer, firstAndLast } from './gpu/timer.ts';
@@ -57,6 +58,22 @@ const flyControls = attachFlyControls(
   () => settings.cameraMode === 'fly',
   () => setCameraMode('fly'), // pressing W, A, S, D, Q or E while orbiting
 );
+
+// ?spin= and ?turn= (camera/spin.ts): a camera move that's the same every
+// time, for scripts/motion.ts. P starts it, or starts it again. It always
+// uses the orbit camera, starting from the scene's view.
+const { spin, problems: spinProblems } = parseSpin(location.search);
+for (const problem of spinProblems) console.warn(`[spin] ${problem}`);
+const spinStartYaw = orbit.yaw;
+let spinStep: number | null = null; // frames turned since P was pressed; null before
+if (spin) {
+  settings.cameraMode = 'orbit';
+  orbit.yaw = spinYaw(spinStartYaw, spin, 0);
+  canvas.dataset['spin'] = 'ready';
+  window.addEventListener('keydown', (event) => {
+    if (event.code === 'KeyP' && spin.degreesPerFrame !== 0) spinStep = 0;
+  });
+}
 
 // The panel's buttons raise these flags, and the next frame acts on them.
 let stepRequested = false;
@@ -147,6 +164,7 @@ async function start(): Promise<void> {
   let lastSampleTime = -Infinity;
   let shownLevel = 0; // denoise passes in the image on screen
   let generation = 0; // counts restarts of the running total, so the denoiser can tell images apart
+  let previousCamera: CameraBasis | null = null; // the camera the last frame was drawn with
 
   // requestAnimationFrame calls us once per display refresh, just before the
   // browser paints. `now` is on the same clock as performance.now().
@@ -157,6 +175,16 @@ async function start(): Promise<void> {
     if (settings.sunMoves) sunSeconds += seconds;
     if (settings.cameraMode === 'fly') Object.assign(fly, moveFly(fly, flyControls.input(), seconds));
     else Object.assign(orbit, spinOrbit(orbit, orbitControls.input(), seconds));
+
+    // A spin turns one step for each frame drawn. Once it has turned all its
+    // frames it holds the last picture, without refining it, so a script
+    // can take it as it was while moving.
+    const spinHeld = spin !== null && spinStep !== null && spinStep >= spin.frames;
+    if (spin && spinStep !== null && !spinHeld) {
+      spinStep++;
+      orbit.yaw = spinYaw(spinStartYaw, spin, spinStep);
+    }
+    if (spin) canvas.dataset['spin'] = spinHeld ? 'done' : spinStep === null ? 'ready' : 'turning';
 
     const inputs = {
       camera: settings.cameraMode === 'fly' ? flyBasis(fly) : orbitBasis(orbit),
@@ -197,7 +225,7 @@ async function start(): Promise<void> {
     const addSample = samples.held < target;
     const output = pass.output();
     const redenoise = !addSample && level !== shownLevel && output !== null;
-    if (addSample || redenoise) {
+    if (!spinHeld && (addSample || redenoise)) {
       // Record GPU commands into an encoder, then submit them as one batch.
       const encoder = device.createCommandEncoder({ label: 'frame' });
       const canvasView = context.getCurrentTexture().createView();
@@ -209,7 +237,14 @@ async function start(): Promise<void> {
         // The tracer draws the plain average; the denoiser, if on, then
         // draws over it. The GPU time covers both.
         const { first, last } = firstAndLast(stamps);
-        pass.encode(encoder, canvasView, { ...inputs, sampleIndex }, scene, level > 0 ? first : stamps);
+        pass.encode(
+          encoder,
+          canvasView,
+          { ...inputs, sampleIndex, previousCamera: previousCamera ?? inputs.camera },
+          scene,
+          level > 0 ? first : stamps,
+        );
+        previousCamera = inputs.camera;
         const traced = pass.output(); // null if the canvas is too big to keep records for
         if (level > 0 && traced) denoiser.encode(encoder, canvasView, traced, image(level), last);
         shownLevel = traced ? level : 0;
@@ -224,7 +259,7 @@ async function start(): Promise<void> {
     hud.frame(now, {
       renderer: RENDERER_TEXT[settings.renderer],
       gpuTimes: timer ? timer.times : null,
-      camera: settings.cameraMode === 'fly' ? `Fly · ${fly.speed.toFixed(1)} m/s` : 'Orbit',
+      camera: settings.cameraMode === 'fly' ? `Fly · ${fly.speed.toFixed(1)} m/s` : `Orbit${spinText()}`,
       width: canvas.width,
       height: canvas.height,
       samples: samples.held,
@@ -250,6 +285,13 @@ async function start(): Promise<void> {
     console.warn(`[WebGPU] device lost (${info.reason}): ${info.message} Restarting.`);
     void start();
   });
+}
+
+// The HUD's note on a spin: how far it has got, or how to start it.
+function spinText(): string {
+  if (!spin || spin.degreesPerFrame === 0) return '';
+  const total = Number.isFinite(spin.frames) ? `/${spin.frames}` : '';
+  return spinStep === null ? ' · press P to spin' : ` · spin ${spinStep}${total}`;
 }
 
 // ?scene=<name> picks the layout. An unknown name falls back to the default
