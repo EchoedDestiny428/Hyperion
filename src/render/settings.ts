@@ -23,6 +23,7 @@ export const VIEWS = {
   sunlight: 4, // lit, cast shadow, or facing away from the sun
   rays: 5, // how many rays the pixel cost
   motion: 6, // how far and which way each point moved on screen since the last frame
+  history: 7, // how many samples each pixel holds, which differs once the camera has moved
 } as const;
 
 export type View = keyof typeof VIEWS;

@@ -27,7 +27,6 @@ test('the counter keeps its total while nothing changes', () => {
 
 test('any change to the inputs or the scene starts the total over', () => {
   const changes: ImageInputs[] = [
-    { ...inputs, camera: { ...inputs.camera, position: [0, 1, 5.01] } },
     { ...inputs, width: 801 },
     { ...inputs, timeSeconds: 0.016 },
     { ...inputs, renderer: 0 },
@@ -49,6 +48,22 @@ test('any change to the inputs or the scene starts the total over', () => {
   counter.take();
   counter.check(inputs, { ...ballTest1 }); // another scene object, even with the same contents
   assert.equal(counter.held, 0);
+});
+
+test('moving the camera keeps the total, but the still count starts again', () => {
+  const counter = createSampleCounter();
+  counter.check(inputs, ballTest1);
+  counter.take();
+  counter.take();
+  assert.equal(counter.moved, false);
+  counter.check({ ...inputs, camera: { ...inputs.camera, position: [0, 1, 5.01] } }, ballTest1);
+  assert.equal(counter.moved, true);
+  assert.equal(counter.held, 2); // the picture carries on: new random numbers, no restart
+  assert.equal(counter.still, 0); // and refines again, up to the limit, after the move
+  assert.equal(counter.take(), 2);
+  counter.check({ ...inputs, camera: { ...inputs.camera, position: [0, 1, 5.01] } }, ballTest1);
+  assert.equal(counter.moved, false);
+  assert.equal(counter.still, 1);
 });
 
 test('restart empties the total', () => {

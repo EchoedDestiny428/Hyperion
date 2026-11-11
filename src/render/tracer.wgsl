@@ -24,6 +24,7 @@ struct Frame {
   sampleIndex: u32, // samples already in the running total; 0 = start over
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
   exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
+  cameraMoved: u32, // 1 if the camera moved since the last frame: pixels then find their history where their point was
   // The camera the last frame was drawn with, to find where each point was
   // on screen then (its motion vector). The same as above while it's still.
   previousCameraPos: vec3f,
@@ -49,6 +50,7 @@ const VIEW_DISTANCE = 3u;
 const VIEW_SUNLIGHT = 4u;
 const VIEW_RAYS = 5u;
 const VIEW_MOTION = 6u;
+const VIEW_HISTORY = 7u;
 
 // ---- Full-screen triangle ------------------------------------------------
 // One triangle with corners (-1,-1), (3,-1), (-1,3) covers all of clip space
@@ -246,11 +248,18 @@ var<private> rayCount: u32;
 //   the mirror's color. Chrome reflects the color of what it shows.
 // - The distance stays NO_HIT where there's nothing to denoise: sky, and
 //   glowing surfaces, whose light the camera sees directly, without noise.
+// - The distance is negative for a mirror image. A vertical mirror standing
+//   on the floor shows the floor in exactly the floor's own plane, facing the
+//   same way, so position and facing can't tell the two apart; this does,
+//   and the denoiser and reprojection never mix them.
 var<private> firstColor: vec3f;
 var<private> firstSurface: vec4f;
 // Whether the path tracer's camera ray went straight to a light or the sky,
 // with nothing in between: see isNoiseFree.
 var<private> directGlow: bool;
+// How far along the camera ray the first thing it shows is: as firstSurface's
+// distance, but also for a glowing surface. NO_HIT for sky. For reprojecting.
+var<private> firstDepth: f32;
 
 // Polished metal: the path always reflects off it in one exact direction.
 fn isPerfectMirror(material: Material) -> bool {
@@ -1085,6 +1094,7 @@ fn tracePath(primary: Ray) -> vec3f {
   // For finding firstSurface: whether it's still to be found, how far the
   // path has come, and the perfect mirrors on the way.
   var seeking = true;
+  var throughMirror = false;
   var travelled = 0.0;
   var mirrorTint = vec3f(1.0);
   var mirrors = mat3x3f(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
@@ -1120,12 +1130,14 @@ fn tracePath(primary: Ray) -> vec3f {
         // the mirror shows, tinted by it.
         mirrorTint *= color;
         mirrors = mirrors * mirrorMatrix(facing);
+        throughMirror = true;
       } else {
         seeking = false;
+        firstDepth = travelled;
         directGlow = bounce == 0u && any(material.emission != vec3f(0.0));
         if (all(material.emission == vec3f(0.0))) {
           firstColor = mirrorTint * color;
-          firstSurface = vec4f(mirrors * facing, travelled);
+          firstSurface = vec4f(mirrors * facing, select(travelled, -travelled, throughMirror));
         }
       }
     }
@@ -1271,6 +1283,176 @@ fn motionVector(point: vec3f) -> vec2f {
   return now - then;
 }
 
+// ---- Reusing last frame's samples (reprojection) ---------------------------
+// While the camera moves, each pixel looks for its point in last frame's
+// records: where the point was on screen (projectToPixel with last frame's
+// camera), blending the 4 records around that spot by how near each one's
+// center is ("bilinear" sampling). Records that show a different surface
+// are left out: the point was hidden behind something last frame, or is
+// on the far side of an edge. If none is left, the pixel starts over.
+
+// Stands in for "infinitely far" (the sky) when reprojecting: far enough that
+// moving the camera makes no difference, near enough for 32-bit floats.
+const FAR_AWAY = 1e6;
+// A record counts as the same surface if it faces within about 25° of this
+// sample's ...
+const MIN_HISTORY_FACING = 0.9;
+// ... and lies within this many pixel widths of its plane. Neighbors on the
+// same flat surface are on it exactly; the gap behind a column is far more.
+const HISTORY_PLANE_TOLERANCE = 4.0;
+// Records adding up to less than this weight are too few to trust.
+const MIN_HISTORY_WEIGHT = 0.05;
+// While moving, history counts as at most this many samples. Each frame's
+// lookup between pixels blurs the history a little, so a long one smears
+// shadows and reflections; a short one stays noisier, which the denoiser
+// then smooths. On motion-test (npm run motion, frame 60, Denoise 2), caps
+// of 32, 16, 8 and 4 gave errors of 6.5, 6.1, 5.6 and 5.3 (checked on
+// 2026-11-11). C2's session 3 makes this a slider.
+const MAX_MOVING_HISTORY = 4.0;
+
+// The unit ray last frame's camera aimed through a point on its screen.
+fn previousRay(pixel: vec2f) -> vec3f {
+  let ndc = vec2f(pixel.x / frame.resolution.x * 2.0 - 1.0, 1.0 - pixel.y / frame.resolution.y * 2.0);
+  return normalize(
+    frame.previousCameraForward
+      + frame.previousCameraRight * (ndc.x * frame.tanHalfFovY * frame.aspect)
+      + frame.previousCameraUp * (ndc.y * frame.tanHalfFovY),
+  );
+}
+
+// Whether a record, kept for the pixel centered at `center` last frame, shows
+// the same surface as this sample, which hit `surface` at `point`. Sky and
+// lights (NO_HIT) only match each other, and mirror images (negative
+// distance) only other mirror images.
+fn sameSurface(stored: vec4f, center: vec2f, surface: vec4f, point: vec3f) -> bool {
+  let storedEmpty = stored.w >= NO_HIT;
+  let sampleEmpty = surface.w >= NO_HIT;
+  if (storedEmpty || sampleEmpty) {
+    return storedEmpty && sampleEmpty;
+  }
+  if ((stored.w < 0.0) != (surface.w < 0.0) || dot(stored.xyz, surface.xyz) < MIN_HISTORY_FACING) {
+    return false;
+  }
+  let storedPoint = frame.previousCameraPos + previousRay(center) * abs(stored.w);
+  let pixelWidth = abs(surface.w) * 2.0 * frame.tanHalfFovY / frame.resolution.y;
+  return abs(dot(surface.xyz, storedPoint - point)) < HISTORY_PLANE_TOLERANCE * pixelWidth;
+}
+
+struct Reprojected {
+  record: PixelRecord, // the blend of the matching records
+  found: bool, // false: nothing matched, so start over
+}
+
+fn reproject(point: vec3f, surface: vec4f) -> Reprojected {
+  var result: Reprojected; // all zero: nothing found
+  // Behind last frame's camera, it can't have been on screen.
+  if (dot(point - frame.previousCameraPos, frame.previousCameraForward) <= 0.0) {
+    return result;
+  }
+  let was = projectToPixel(
+    point,
+    frame.previousCameraPos,
+    frame.previousCameraRight,
+    frame.previousCameraUp,
+    frame.previousCameraForward,
+  );
+  // Pixel centers sit at whole numbers + 0.5. The 4 around `was` start at
+  // `corner`, and `f` is how far `was` is across from it, 0 to 1 each way.
+  let corner = floor(was - 0.5);
+  let f = was - 0.5 - corner;
+  var weights = 0.0;
+  for (var i = 0u; i < 4u; i++) {
+    let step = vec2f(f32(i & 1u), f32(i >> 1u));
+    let tap = corner + step;
+    let w = mix(1.0 - f.x, f.x, step.x) * mix(1.0 - f.y, f.y, step.y);
+    if (w <= 0.0 || any(tap < vec2f(0.0)) || any(tap >= frame.resolution)) {
+      continue;
+    }
+    let earlier = history[u32(tap.y) * u32(frame.resolution.x) + u32(tap.x)];
+    if (!sameSurface(earlier.surface, tap + 0.5, surface, point)) {
+      continue;
+    }
+    // The records hold totals over their samples, counts included, so a
+    // weighted blend of them is a weighted pool of those samples.
+    result.record.light += w * earlier.light;
+    result.record.albedo += w * earlier.albedo;
+    result.record.noiseFree += w * earlier.noiseFree;
+    weights += w;
+  }
+  if (weights < MIN_HISTORY_WEIGHT) {
+    return Reprojected(result.record, false);
+  }
+  result.record.light /= weights;
+  result.record.albedo /= weights;
+  result.record.noiseFree /= weights;
+  // While moving, older samples count for less, so blur and stale light
+  // fade instead of piling up (C2 session 3 will make this smarter).
+  let count = result.record.albedo.a;
+  if (count > MAX_MOVING_HISTORY) {
+    let keep = MAX_MOVING_HISTORY / count;
+    result.record.light *= keep;
+    result.record.albedo *= keep;
+    result.record.noiseFree *= keep;
+  }
+  result.found = true;
+  return result;
+}
+
+// Reading the history between pixels blurs it a little, every frame, and
+// over many frames a texture's fine lines (tile grout) wash out. Lighting is
+// smooth and can take the blur; color can't. So, as SVGF does, the history's
+// light is divided by its old color and multiplied by a recent one: an
+// average over only the last few samples, which keeps textures sharp. Its
+// color is the same idea as demodulation in denoise.wgsl.
+const RECENT_COLOR_SAMPLES = 4.0;
+// As in denoise.wgsl: colors darker than this count as this dark, so tiny
+// colors can't blow light up into huge numbers.
+const COLOR_FLOOR = 0.01;
+// Light that isn't in proportion to color (a glint, haze) would be scaled
+// wrongly where the color changes a lot, as on a black-and-white checker; so
+// a step is never more than this, either way.
+const MAX_RECOLOR = 4.0;
+
+fn recolored(history: PixelRecord, color: vec3f) -> PixelRecord {
+  let rest = history.albedo.a - history.noiseFree.a; // the samples in the light and color totals
+  if (rest < 0.5) {
+    return history;
+  }
+  let was = max(history.albedo.rgb / rest, vec3f(COLOR_FLOOR));
+  let now = max(mix(was, color, 1.0 / min(rest + 1.0, RECENT_COLOR_SAMPLES)), vec3f(COLOR_FLOOR));
+  let scale = clamp(now / was, vec3f(1.0 / MAX_RECOLOR), vec3f(MAX_RECOLOR));
+  // The brightness² total scales with the square of the brightness.
+  let brightness = clamp(luminance(now) / luminance(was), 1.0 / MAX_RECOLOR, MAX_RECOLOR);
+  var result = history;
+  result.light = vec4f(history.light.rgb * scale, history.light.a * brightness * brightness);
+  result.albedo = vec4f(now * rest, history.albedo.a);
+  return result;
+}
+
+// A jittered sample's surface, as the record keeps it: the distance along
+// the ray through the pixel's *center* to the sample's surface (or the plane
+// it lies in). The denoiser and the next frame's reprojection rebuild points
+// from center rays; with the jittered ray's own distance, a floor seen at a
+// grazing angle would come out up to a pixel's depth off its plane.
+fn surfaceForCenter(surface: vec4f, point: vec3f, pixelIndex: vec2u) -> vec4f {
+  if (surface.w >= NO_HIT) {
+    return surface;
+  }
+  let center = vec2f(pixelIndex) + 0.5;
+  let ndc = vec2f(center.x / frame.resolution.x * 2.0 - 1.0, 1.0 - center.y / frame.resolution.y * 2.0);
+  let dir = normalize(
+    frame.cameraForward
+      + frame.cameraRight * (ndc.x * frame.tanHalfFovY * frame.aspect)
+      + frame.cameraUp * (ndc.y * frame.tanHalfFovY),
+  );
+  let across = dot(surface.xyz, dir);
+  let distance = dot(surface.xyz, point - frame.cameraPos) / across;
+  // Seen exactly edge-on, the plane gives no answer; keep the sample's own.
+  // A mirror image keeps its negative sign.
+  let centered = select(distance, -distance, surface.w < 0.0);
+  return vec4f(surface.xyz, select(surface.w, centered, abs(across) > 1e-3 && distance > 0.0));
+}
+
 // VIEW_MOTION: the direction a point moved as a hue (right red, down
 // yellow-green, left cyan, up violet), and how far as brightness: black for
 // still, half bright at about 3 pixels a frame.
@@ -1320,8 +1502,8 @@ fn heat(rays: f32) -> vec3f {
 // the sky, and the rest. The rest is what the denoiser works on.
 struct PixelRecord {
   light: vec4f, // the rest: rgb, running total of light (or a debug view's value); a, of luminance(light)²
-  albedo: vec4f, // the rest: rgb, running total of the first surface's color (firstColor); a, 1 once surface is set
-  surface: vec4f, // firstSurface from the first sample that hit a surface (usually sample 0, through the center)
+  albedo: vec4f, // the rest: rgb, running total of the first surface's color (firstColor); a, how many samples in all
+  surface: vec4f, // firstSurface (negative distance: seen in a mirror): kept from the first sample that hit one, unless the camera moved
   noiseFree: vec4f, // the noise-free samples: rgb, running total of their screen colors (toneMap); a, how many
 }
 
@@ -1381,7 +1563,13 @@ fn encodeSrgb(linear: vec3f) -> vec3f {
 // sky. Only for the final image (debug views aren't light), and not for the
 // Whitted renderer, whose glints in mirrors would fade the same way.
 fn isNoiseFree() -> bool {
-  return frame.view == VIEW_FINAL && frame.renderer == RENDERER_PATH && directGlow;
+  return showsLight() && frame.renderer == RENDERER_PATH && directGlow;
+}
+
+// The views that trace light and keep its running totals: the final image,
+// and the history-length view, which shows how many samples it holds.
+fn showsLight() -> bool {
+  return frame.view == VIEW_FINAL || frame.view == VIEW_HISTORY;
 }
 
 // A pixel's color for the screen, over `count` samples: the noise-free ones'
@@ -1440,9 +1628,10 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   rayCount = 0u;
   firstColor = vec3f(0.0);
   firstSurface = vec4f(0.0, 0.0, 0.0, NO_HIT);
+  firstDepth = NO_HIT;
   directGlow = false;
   var value: vec3f;
-  if (frame.view == VIEW_FINAL || frame.view == VIEW_RAYS) {
+  if (showsLight() || frame.view == VIEW_RAYS) {
     var light: vec3f;
     if (frame.renderer == RENDERER_PATH) {
       light = tracePath(ray);
@@ -1454,46 +1643,73 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
     value = debugView(ray);
   }
 
-  // Add the value to the pixel's running totals and show the average: a
-  // noise-free sample's screen color to one total, the rest's light to the
-  // other (PixelRecord, screenColor).
-  let noiseFree = isNoiseFree();
-  var total = vec4f(value, luminance(value) * luminance(value));
-  var noiseFreeTotal = vec4f(0.0);
-  if (noiseFree) {
-    noiseFreeTotal = vec4f(toneMap(value * frame.exposure), 1.0);
-    total = vec4f(0.0);
-  }
-  let foundSurface = select(0.0, 1.0, firstSurface.w < NO_HIT);
-  var albedoTotal = vec4f(firstColor, foundSurface);
-  var count = 1.0;
-  let slot = pixelIndex.y * u32(frame.resolution.x) + pixelIndex.x;
-  if (slot < arrayLength(&pixels)) {
-    var surface = firstSurface;
-    if (frame.sampleIndex > 0u) {
-      let earlier = history[slot];
-      total += earlier.light;
-      albedoTotal = vec4f(albedoTotal.rgb + earlier.albedo.rgb, max(earlier.albedo.a, foundSurface));
-      noiseFreeTotal += earlier.noiseFree;
-      count = f32(frame.sampleIndex + 1u);
-      // Keep the surface found first. Where the center ray hit a light, the
-      // denoiser still needs the surface beside it, from the first jittered
-      // ray that found it.
-      if (foundSurface <= earlier.albedo.a) {
-        surface = earlier.surface;
-      }
-    }
-    pixels[slot] = PixelRecord(total, albedoTotal, surface, noiseFreeTotal);
+  // This sample, as a record of one: a noise-free sample's screen color goes
+  // in one total, the rest's light in the other (PixelRecord, screenColor).
+  var record = PixelRecord(
+    vec4f(value, luminance(value) * luminance(value)),
+    vec4f(firstColor, 1.0),
+    firstSurface,
+    vec4f(0.0),
+  );
+  if (isNoiseFree()) {
+    record.noiseFree = vec4f(toneMap(value * frame.exposure), 1.0);
+    record.light = vec4f(0.0);
   }
 
+  // Add it to the pixel's history, and show the average.
+  let slot = pixelIndex.y * u32(frame.resolution.x) + pixelIndex.x;
+  if (slot < arrayLength(&pixels)) {
+    if (frame.sampleIndex > 0u) {
+      if (frame.cameraMoved == 0u) {
+        // Standing still: the pixel's own record, as in C1.
+        let earlier = history[slot];
+        record.light += earlier.light;
+        record.albedo += earlier.albedo;
+        record.noiseFree += earlier.noiseFree;
+        // Keep the surface found first. Where the center ray hit a light,
+        // the denoiser still needs the surface beside it, from the first
+        // jittered ray that found it.
+        if (firstSurface.w >= NO_HIT || earlier.surface.w < NO_HIT) {
+          record.surface = earlier.surface;
+        }
+      } else if (showsLight() && frame.renderer == RENDERER_PATH) {
+        // Moving: carry on from where this point was last frame, if that
+        // was the same surface. Otherwise it just came into view, and the
+        // pixel starts over from this sample.
+        let depth = select(firstDepth, FAR_AWAY, firstDepth >= NO_HIT);
+        let point = ray.origin + ray.dir * depth;
+        let earlier = reproject(point, firstSurface);
+        if (earlier.found) {
+          var history = earlier.record;
+          if (firstSurface.w < NO_HIT) {
+            history = recolored(history, firstColor);
+          }
+          record.light += history.light;
+          record.albedo += history.albedo;
+          record.noiseFree += history.noiseFree;
+        }
+        record.surface = surfaceForCenter(firstSurface, point, pixelIndex);
+      }
+      // The other renderer and views start over after a move, as before:
+      // they have little noise to hide, and nothing to reproject them by.
+    }
+    pixels[slot] = record;
+  }
+
+  let count = record.albedo.a;
   if (frame.view == VIEW_FINAL) {
     // A pixel whose samples all hit surfaces (most of them) has rest = count,
     // so this is exactly the plain average, tone mapped, as in C1.
-    let rest = count - noiseFreeTotal.a;
-    return vec4f(screenColor(total.rgb / max(rest, 1.0), noiseFreeTotal, count), 1.0);
+    let rest = count - record.noiseFree.a;
+    return vec4f(screenColor(record.light.rgb / max(rest, 1.0), record.noiseFree, count), 1.0);
+  }
+  if (frame.view == VIEW_HISTORY) {
+    // On the rays view's doubling scale, by the square root, so it reaches
+    // further: 1 sample blue, 4 teal, 16 green, 64 yellow, 256 or more red.
+    return vec4f(heat(sqrt(count)), 1.0);
   }
   // The debug views are averaged as they are: they're not light.
-  var color = total.rgb / count;
+  var color = record.light.rgb / count;
   if (frame.view == VIEW_RAYS) {
     color = heat(color.x); // the average number of rays per sample
   }

@@ -31,6 +31,7 @@ const VIEW_TEXT: Record<View, string> = {
   sunlight: 'Sunlight',
   rays: 'Rays per pixel',
   motion: 'Motion vectors',
+  history: 'History length',
 };
 
 const PACE_TEXT: Record<Pace, string> = {

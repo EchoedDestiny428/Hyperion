@@ -33,6 +33,7 @@ struct Frame {
   sampleIndex: u32, // samples already in the running total; 0 = start over
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
   exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
+  cameraMoved: u32, // 1 if the camera moved since the last frame: pixels then find their history where their point was
   // The camera the last frame was drawn with, to find where each point was
   // on screen then (its motion vector). The same as above while it's still.
   previousCameraPos: vec3f,
@@ -43,8 +44,8 @@ struct Frame {
 
 struct PixelRecord {
   light: vec4f, // the rest: rgb, running total of light (or a debug view's value); a, of luminance(light)²
-  albedo: vec4f, // the rest: rgb, running total of the first surface's color (firstColor); a, 1 once surface is set
-  surface: vec4f, // firstSurface from the first sample that hit a surface (usually sample 0, through the center)
+  albedo: vec4f, // the rest: rgb, running total of the first surface's color (firstColor); a, how many samples in all
+  surface: vec4f, // firstSurface (negative distance: seen in a mirror): kept from the first sample that hit one, unless the camera moved
   noiseFree: vec4f, // the noise-free samples: rgb, running total of their screen colors (toneMap); a, how many
 }
 
@@ -105,16 +106,17 @@ fn slotOf(pixel: vec2u) -> u32 {
   return pixel.y * u32(frame.resolution.x) + pixel.x;
 }
 
-// The number of samples in each pixel's running totals.
-fn sampleCount() -> f32 {
-  return f32(frame.sampleIndex + 1u);
+// The number of samples in a pixel's running totals. It's the pixel's own:
+// once the camera has moved, a pixel that just came into view has fewer.
+fn sampleCount(record: PixelRecord) -> f32 {
+  return record.albedo.a;
 }
 
 // How many of them hit a surface, which is what the light and albedo totals
 // hold. The others went straight to a light or the sky, so have no noise to
 // remove; they're in record.noiseFree (see tracer.wgsl's screenColor).
 fn restCount(record: PixelRecord) -> f32 {
-  return sampleCount() - record.noiseFree.a;
+  return sampleCount(record) - record.noiseFree.a;
 }
 
 // Below this, a color counts as this dark. Dividing by a color near zero would
@@ -150,16 +152,17 @@ struct Guide {
   normal: vec3f,
   depth: f32, // along cameraForward; NO_HIT where there's nothing to denoise
   logAlbedo: vec3f, // log2 of the color, so ratios become differences
+  mirrored: f32, // 1 for a mirror image, 0 otherwise: the two never mix
 }
 
 fn guideOf(pixel: vec2u, record: PixelRecord) -> Guide {
   var depth = NO_HIT;
   if (record.surface.w < NO_HIT) {
-    // The record keeps the distance along the ray; the ray's length per unit
-    // of depth turns it into depth.
-    depth = record.surface.w / length(rayThrough(screenPoint(pixel)));
+    // The record keeps the distance along the ray (negative for a mirror
+    // image); the ray's length per unit of depth turns it into depth.
+    depth = abs(record.surface.w) / length(rayThrough(screenPoint(pixel)));
   }
-  return Guide(record.surface.xyz, depth, log2(albedoOf(record)));
+  return Guide(record.surface.xyz, depth, log2(albedoOf(record)), select(0.0, 1.0, record.surface.w < 0.0));
 }
 
 // Packed into 16 bytes, which halves what the passes read. The depth stays a
@@ -169,7 +172,7 @@ fn guideOf(pixel: vec2u, record: PixelRecord) -> Guide {
 fn packGuide(g: Guide) -> vec4u {
   return vec4u(
     bitcast<u32>(g.depth),
-    pack4x8snorm(vec4f(g.normal, 0.0)),
+    pack4x8snorm(vec4f(g.normal, g.mirrored)),
     pack2x16float(g.logAlbedo.rg),
     pack2x16float(vec2f(g.logAlbedo.b, 0.0)),
   );
@@ -179,9 +182,10 @@ fn guideAt(slot: u32) -> Guide {
   let packed = guides[slot];
   // Rounding to 8 bits leaves the normal a little off unit length, which the
   // normal test below would read as a turn of several degrees.
-  let normal = normalize(unpack4x8snorm(packed.y).xyz);
+  let normalAndMirror = unpack4x8snorm(packed.y);
+  let normal = normalize(normalAndMirror.xyz);
   let logAlbedo = vec3f(unpack2x16float(packed.z), unpack2x16float(packed.w).x);
-  return Guide(normal, bitcast<f32>(packed.x), logAlbedo);
+  return Guide(normal, bitcast<f32>(packed.x), logAlbedo, select(0.0, 1.0, normalAndMirror.w > 0.5));
 }
 
 // How much a neighbor `reach` pixels away looks like the same surface. Three
@@ -213,6 +217,7 @@ struct Center {
   plane: vec4f,
   inversePixelWidth: f32, // 1 / (PLANE_TOLERANCE × the width one pixel covers here)
   logAlbedo: vec3f,
+  mirrored: f32,
 }
 
 fn centerOf(pixel: vec2u, g: Guide) -> Center {
@@ -226,7 +231,7 @@ fn centerOf(pixel: vec2u, g: Guide) -> Center {
   );
   // Each pixel spans the same angle: the screen's height covers 2·tan(fov/2).
   let pixelWidth = g.depth * length(ray) * 2.0 * frame.tanHalfFovY / frame.resolution.y;
-  return Center(n, plane, 1.0 / (PLANE_TOLERANCE * pixelWidth), g.logAlbedo);
+  return Center(n, plane, 1.0 / (PLANE_TOLERANCE * pixelWidth), g.logAlbedo, g.mirrored);
 }
 
 // The surface tests' share of a neighbor's weight, as the normal factor and
@@ -240,7 +245,9 @@ fn likeness(c: Center, other: Guide, pixel: vec2u, inverseReach: f32) -> Likenes
   // x^128 by squaring seven times. pow(x, 128.0) would be the same, except
   // WGSL defines it through log2(x), which has no value at x = 0.
   // https://www.w3.org/TR/WGSL/#floating-point-accuracy
-  var facing = max(dot(c.normal, other.normal), 0.0);
+  // A mirror image never mixes with the real thing (see firstSurface in
+  // tracer.wgsl): a mirror on the floor shows the floor in the floor's plane.
+  var facing = select(0.0, max(dot(c.normal, other.normal), 0.0), c.mirrored == other.mirrored);
   for (var i = 0; i < 7; i++) {
     facing *= facing;
   }
@@ -457,7 +464,7 @@ fn showDenoised(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   if (record.surface.w < NO_HIT) {
     restMean = illuminationIn[slot].rgb * albedoOf(record);
   }
-  return vec4f(screenColor(restMean, record.noiseFree, sampleCount()), 1.0);
+  return vec4f(screenColor(restMean, record.noiseFree, sampleCount(record)), 1.0);
 }
 
 // The plain average, as the tracer shows it: for turning the slider back to
@@ -469,5 +476,5 @@ fn showRaw(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
     return vec4f(0.0, 0.0, 0.0, 1.0);
   }
   let record = pixels[slot];
-  return vec4f(screenColor(record.light.rgb / max(restCount(record), 1.0), record.noiseFree, sampleCount()), 1.0);
+  return vec4f(screenColor(record.light.rgb / max(restCount(record), 1.0), record.noiseFree, sampleCount(record)), 1.0);
 }

@@ -4,7 +4,10 @@ import type { FrameParams } from './frame-uniforms.ts';
 // Progressive accumulation. While nothing changes, frames add samples to a
 // running total per pixel on the GPU, and the screen shows the average, so
 // the image keeps getting smoother. Anything that changes what the image
-// shows (camera, canvas size, sun, renderer, view, scene) starts the total over.
+// shows (canvas size, sun, renderer, view, scene, sliders) starts the total
+// over. Moving the camera doesn't: each pixel carries on from where its point
+// was last frame (reprojection, in tracer.wgsl), so only what just came into
+// view starts over.
 
 // The sample-count choices in the Anti-aliasing menu, like games' "4x" or
 // "16x" supersampling. The image stops refining at the chosen count, and
@@ -19,41 +22,66 @@ export const SLOW_PACE_MS = 250; // 4 samples per second
 
 // Everything the image depends on, apart from which sample this is. The
 // last frame's camera isn't part of the picture, only of how it got there.
-export type ImageInputs = Omit<FrameParams, 'sampleIndex' | 'previousCamera'>;
+export type ImageInputs = Omit<FrameParams, 'sampleIndex' | 'previousCamera' | 'cameraMoved'>;
 
 export interface SampleCounter {
-  readonly held: number; // samples in the running total
-  // Forgets the total if what the image shows has changed since last frame.
+  // Samples since the picture last started over. Moving the camera doesn't
+  // start it over. The shader seeds its random numbers with this, so every
+  // frame, moving or not, gets new ones.
+  readonly held: number;
+  // Samples since anything changed, the camera included: what the Samples
+  // limit and pace count, so a picture always refines again after a move.
+  readonly still: number;
+  readonly moved: boolean; // the camera moved since the frame before (set by check())
+  // Starts the picture over if what it shows has changed since last frame,
+  // and notes whether the camera moved.
   check(inputs: ImageInputs, scene: Scene): void;
-  // Claims the next sample and returns its index, which is how many samples
-  // the total already holds (0 = the shader overwrites instead of adding).
+  // Claims the next sample and returns its index, `held` before counting it
+  // (0 = the shader starts over instead of adding to the history).
   take(): number;
   restart(): void;
 }
 
 export function createSampleCounter(): SampleCounter {
   let previousKey = '';
+  let previousCamera = '';
   let previousScene: Scene | null = null;
   let held = 0;
+  let still = 0;
+  let moved = false;
   return {
     get held() {
       return held;
     },
+    get still() {
+      return still;
+    },
+    get moved() {
+      return moved;
+    },
     check(inputs, scene) {
       // Comparing the JSON text compares every field, including any added
       // to FrameParams later. It's a few hundred characters per frame.
-      const key = JSON.stringify(inputs);
+      const { camera, ...picture } = inputs;
+      const key = JSON.stringify(picture);
+      const cameraKey = JSON.stringify(camera);
       if (key !== previousKey || scene !== previousScene) {
         previousKey = key;
         previousScene = scene;
         held = 0;
+        still = 0;
       }
+      moved = previousCamera !== '' && cameraKey !== previousCamera;
+      previousCamera = cameraKey;
+      if (moved) still = 0;
     },
     take() {
+      still++;
       return held++;
     },
     restart() {
       held = 0;
+      still = 0;
     },
   };
 }

@@ -163,7 +163,7 @@ async function start(): Promise<void> {
   let previousNow: number | null = null;
   let lastSampleTime = -Infinity;
   let shownLevel = 0; // denoise passes in the image on screen
-  let generation = 0; // counts restarts of the running total, so the denoiser can tell images apart
+  let generation = 0; // counts changes of picture (restarts and camera moves), so the denoiser can tell them apart
   let previousCamera: CameraBasis | null = null; // the camera the last frame was drawn with
 
   // requestAnimationFrame calls us once per display refresh, just before the
@@ -199,10 +199,10 @@ async function start(): Promise<void> {
     };
     samples.check(inputs, scene);
     // Restart, or lower the limit below what the image already holds: start over.
-    if (restartRequested || samples.held > settings.sampleLimit) samples.restart();
+    if (restartRequested || samples.still > settings.sampleLimit) samples.restart();
     restartRequested = false;
     const target = targetSamples({
-      held: samples.held,
+      held: samples.still,
       limit: settings.sampleLimit,
       pace: settings.pace,
       msSinceLastSample: now - lastSampleTime,
@@ -218,11 +218,11 @@ async function start(): Promise<void> {
     // What the denoiser needs to know about the image, once this frame's sample is in.
     const image = (passes: number): FilterInputs => ({
       generation,
-      samples: samples.held,
+      samples: samples.still,
       level: passes,
-      finished: samples.held >= settings.sampleLimit,
+      finished: samples.still >= settings.sampleLimit,
     });
-    const addSample = samples.held < target;
+    const addSample = samples.still < target;
     const output = pass.output();
     const redenoise = !addSample && level !== shownLevel && output !== null;
     if (!spinHeld && (addSample || redenoise)) {
@@ -232,7 +232,10 @@ async function start(): Promise<void> {
       const stamps = timer?.passTimestamps();
       if (addSample) {
         const sampleIndex = samples.take();
-        if (sampleIndex === 0) generation++;
+        // Compared with the camera of the last frame drawn, which is what the
+        // history was drawn with.
+        const cameraMoved = previousCamera !== null && JSON.stringify(previousCamera) !== JSON.stringify(inputs.camera);
+        if (sampleIndex === 0 || cameraMoved) generation++;
         lastSampleTime = now;
         // The tracer draws the plain average; the denoiser, if on, then
         // draws over it. The GPU time covers both.
@@ -240,7 +243,7 @@ async function start(): Promise<void> {
         pass.encode(
           encoder,
           canvasView,
-          { ...inputs, sampleIndex, previousCamera: previousCamera ?? inputs.camera },
+          { ...inputs, sampleIndex, previousCamera: previousCamera ?? inputs.camera, cameraMoved },
           scene,
           level > 0 ? first : stamps,
         );
@@ -262,7 +265,7 @@ async function start(): Promise<void> {
       camera: settings.cameraMode === 'fly' ? `Fly · ${fly.speed.toFixed(1)} m/s` : `Orbit${spinText()}`,
       width: canvas.width,
       height: canvas.height,
-      samples: samples.held,
+      samples: samples.still,
       sampleLimit: settings.sampleLimit,
       pace: settings.pace,
     });
