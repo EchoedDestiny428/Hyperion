@@ -16,6 +16,7 @@ test('fields land at the offsets struct Frame in tracer.wgsl expects', () => {
     exposure: -1,
     previousCamera: { position: [21, 22, 23], right: [24, 25, 26], up: [27, 28, 29], forward: [30, 31, 32] },
     cameraMoved: true,
+    maxHistory: 4,
   });
   assert.equal(u.length, FRAME_UNIFORM_FLOATS);
   assert.equal(u.byteLength % 16, 0); // uniform structs are sized in 16-byte steps
@@ -40,4 +41,5 @@ test('fields land at the offsets struct Frame in tracer.wgsl expects', () => {
   assert.equal(ints[19], 77);
   assert.equal(ints[20], 12);
   assert.equal(ints[22], 1);
+  assert.equal(u[23], 4);
 });

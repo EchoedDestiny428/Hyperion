@@ -9,7 +9,9 @@
 //
 // Options: --scene <name> (default motion-test), --spin <degrees per frame>
 // (default 0.5), --frames <list> (default 20,60), --denoise <list> (Denoise
-// slider levels, default 0,2), --save <folder> (keeps every picture).
+// slider levels, default 0,2), --history <list> (History slider values, each
+// with every Denoise level; default: the app's own), --save <folder> (keeps
+// every picture).
 // --against needs a build that has ?spin= (camera/spin.ts).
 // Set BROWSER_PATH to use a browser other than Edge or Chrome.
 //
@@ -23,7 +25,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { MAX_DENOISE_LEVEL } from '../src/render/settings.ts';
+import { MAX_DENOISE_LEVEL, MAX_HISTORY } from '../src/render/settings.ts';
 import { SCENES } from '../src/scene/registry.ts';
 import { type Page, captureCanvas, openScene, pick, powerState, pressKey, serve, sleep, slide, startBrowser, waitForHud } from './browser.ts';
 import { errorCells } from './compare.ts';
@@ -56,10 +58,20 @@ async function reference(page: Page, url: string, scene: string, turn: number): 
 }
 
 // The picture after spinning `frames` frames, as it was while still moving.
-async function moving(page: Page, url: string, scene: string, spin: number, frames: number, denoise: number): Promise<Shot> {
+// `history` sets the History slider; null leaves the app's default.
+async function moving(
+  page: Page,
+  url: string,
+  scene: string,
+  spin: number,
+  frames: number,
+  denoise: number,
+  history: number | null,
+): Promise<Shot> {
   await openScene(page, url, scene, { spin: String(spin), frames: String(frames) });
   await pick(page, 'Renderer', 'path');
   await slide(page, 'Denoise', denoise);
+  if (history !== null) await slide(page, 'History', history);
   await waitForHud(page, `${scene} before spinning`, (r) => r.samples > 0);
   await pressKey(page, 'KeyP', 'p', 80);
   for (let waited = 0; ; waited += 100) {
@@ -83,6 +95,7 @@ async function main(): Promise<void> {
       spin: { type: 'string', default: '0.5' },
       frames: { type: 'string', default: '20,60' },
       denoise: { type: 'string', default: '0,2' },
+      history: { type: 'string' },
       against: { type: 'string' },
       save: { type: 'string' },
     },
@@ -101,6 +114,12 @@ async function main(): Promise<void> {
       throw new Error(`--denoise ${level} isn't a Denoise slider level: 0 to ${MAX_DENOISE_LEVEL}.`);
     }
   }
+  const histories = values.history === undefined ? [null] : values.history.split(',').map(Number);
+  for (const history of histories) {
+    if (history !== null && !(Number.isInteger(history) && history >= 0 && history <= MAX_HISTORY)) {
+      throw new Error(`--history ${history} isn't a History slider value: 0 to ${MAX_HISTORY}.`);
+    }
+  }
   if (values.save) await mkdir(values.save, { recursive: true });
 
   const after = await serve('dist', 'No build found. Run "npm run build" first.');
@@ -113,8 +132,15 @@ async function main(): Promise<void> {
   // The old build (at Denoise 0), then the new one at each level. Each
   // column after the first also shows the change from the first.
   const columns = [
-    ...(before ? [{ title: 'Before', url: before.url, level: 0 }] : []),
-    ...levels.map((level) => ({ title: `Denoise ${level}`, url: after.url, level })),
+    ...(before ? [{ title: 'Before', url: before.url, level: 0, history: null as number | null }] : []),
+    ...histories.flatMap((history) =>
+      levels.map((level) => ({
+        title: history === null ? `Denoise ${level}` : `History ${history}, Denoise ${level}`,
+        url: after.url,
+        level,
+        history,
+      })),
+    ),
   ];
 
   try {
@@ -128,8 +154,8 @@ async function main(): Promise<void> {
       await keep(still, `${scene}-${frames}-reference`);
       const errors: number[] = [];
       for (const column of columns) {
-        const picture = await moving(page, column.url, scene, spin, frames, column.level);
-        await keep(picture, `${scene}-${frames}-${column.title.toLowerCase().replace(/ /g, '')}`);
+        const picture = await moving(page, column.url, scene, spin, frames, column.level, column.history);
+        await keep(picture, `${scene}-${frames}-${column.title.toLowerCase().replace(/[ ,]/g, '')}`);
         errors.push(rmsDifference(picture.picture, still.picture));
       }
       rows.push(`| ${frames} | ${errorCells(errors).join(' | ')} |`);

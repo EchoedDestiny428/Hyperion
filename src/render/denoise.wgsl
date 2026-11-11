@@ -34,6 +34,7 @@ struct Frame {
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
   exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
   cameraMoved: u32, // 1 if the camera moved since the last frame: pixels then find their history where their point was
+  maxHistory: f32, // while moving, history counts as at most this many samples; 0 = none (the History slider)
   // The camera the last frame was drawn with, to find where each point was
   // on screen then (its motion vector). The same as above while it's still.
   previousCameraPos: vec3f,

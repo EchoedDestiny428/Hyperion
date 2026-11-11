@@ -13,6 +13,7 @@ import {
   denoiseLevel,
   denoiseReach,
   exposureText,
+  historyCap,
 } from './settings.ts';
 
 // The shader's constants with a given prefix, keyed by the TypeScript name:
@@ -62,4 +63,11 @@ test('exposure reads as stops', () => {
   assert.equal(exposureText(0), '0 stops');
   assert.equal(exposureText(1), '+1 stop');
   assert.equal(exposureText(-0.5), '−0.5 stops');
+});
+
+test('the Samples menu limits the history too', () => {
+  const settings = { ...defaultSettings(), history: 8 };
+  assert.equal(historyCap({ ...settings, sampleLimit: 1024 }), 8);
+  assert.equal(historyCap({ ...settings, sampleLimit: 4 }), 3); // 3 carried over + 1 new = 4
+  assert.equal(historyCap({ ...settings, sampleLimit: 1 }), 0); // "1 (none)": no reuse at all
 });

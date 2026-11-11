@@ -42,6 +42,7 @@ export interface RenderSettings {
   denoise: number; // filter passes, 0 (off) to MAX_DENOISE_LEVEL
   bounces: number; // path tracer: the most surfaces one path visits, 1 to MAX_BOUNCES
   exposure: number; // in stops, MIN_EXPOSURE to MAX_EXPOSURE; each scene sets its own
+  history: number; // while moving, how many samples a pixel carries over, 0 to MAX_HISTORY
 }
 
 export function defaultSettings(): RenderSettings {
@@ -59,7 +60,21 @@ export function defaultSettings(): RenderSettings {
     denoise: 2,
     bounces: DEFAULT_BOUNCES,
     exposure: 0,
+    history: DEFAULT_HISTORY,
   };
+}
+
+// The History slider: while the camera moves, each pixel carries over at
+// most this many samples from earlier frames, on top of its 1 new one. 4 had
+// the least error with the denoiser on, against 8, 16 and 32 (npm run
+// motion on motion-test, checked on 2026-11-11).
+export const DEFAULT_HISTORY = 4;
+export const MAX_HISTORY = 64;
+
+// The history a moving pixel may keep: the History slider, but never more
+// than the Samples menu allows in all, so "1 (none)" really means one.
+export function historyCap(s: RenderSettings): number {
+  return Math.max(0, Math.min(s.history, s.sampleLimit - 1));
 }
 
 // The Exposure slider, in photographers' "stops": each one doubles (or

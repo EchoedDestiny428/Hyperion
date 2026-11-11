@@ -12,7 +12,7 @@ import { hideProblem, showProblem } from './platform/unsupported.ts';
 import { createSampleCounter, targetSamples } from './render/accumulation.ts';
 import { createDenoisePass } from './render/denoise-pass.ts';
 import type { FilterInputs } from './render/denoise-schedule.ts';
-import { type CameraMode, RENDERERS, VIEWS, defaultSettings, denoiseLevel } from './render/settings.ts';
+import { type CameraMode, RENDERERS, VIEWS, defaultSettings, denoiseLevel, historyCap } from './render/settings.ts';
 import { createTracerPass } from './render/tracer-pass.ts';
 import { DEFAULT_SCENE, SCENES, findScene } from './scene/registry.ts';
 import type { Scene } from './scene/scene.ts';
@@ -243,7 +243,13 @@ async function start(): Promise<void> {
         pass.encode(
           encoder,
           canvasView,
-          { ...inputs, sampleIndex, previousCamera: previousCamera ?? inputs.camera, cameraMoved },
+          {
+            ...inputs,
+            sampleIndex,
+            previousCamera: previousCamera ?? inputs.camera,
+            cameraMoved,
+            maxHistory: historyCap(settings),
+          },
           scene,
           level > 0 ? first : stamps,
         );
@@ -268,6 +274,8 @@ async function start(): Promise<void> {
       samples: samples.still,
       sampleLimit: settings.sampleLimit,
       pace: settings.pace,
+      // While moving, each pixel's history is what the HUD can't count.
+      movingHistory: samples.moved && reusesHistory(settings) ? historyCap(settings) : null,
     });
     requestAnimationFrame(frame);
   };
@@ -288,6 +296,12 @@ async function start(): Promise<void> {
     console.warn(`[WebGPU] device lost (${info.reason}): ${info.message} Restarting.`);
     void start();
   });
+}
+
+// Whether moving the camera carries samples over (reproject in tracer.wgsl):
+// only the path tracer's light does, not Whitted or the debug views.
+function reusesHistory(s: typeof settings): boolean {
+  return s.renderer === 'path' && (s.view === 'final' || s.view === 'history');
 }
 
 // The HUD's note on a spin: how far it has got, or how to start it.

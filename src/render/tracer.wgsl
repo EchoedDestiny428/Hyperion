@@ -25,6 +25,7 @@ struct Frame {
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
   exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
   cameraMoved: u32, // 1 if the camera moved since the last frame: pixels then find their history where their point was
+  maxHistory: f32, // while moving, history counts as at most this many samples; 0 = none (the History slider)
   // The camera the last frame was drawn with, to find where each point was
   // on screen then (its motion vector). The same as above while it's still.
   previousCameraPos: vec3f,
@@ -1302,13 +1303,6 @@ const MIN_HISTORY_FACING = 0.9;
 const HISTORY_PLANE_TOLERANCE = 4.0;
 // Records adding up to less than this weight are too few to trust.
 const MIN_HISTORY_WEIGHT = 0.05;
-// While moving, history counts as at most this many samples. Each frame's
-// lookup between pixels blurs the history a little, so a long one smears
-// shadows and reflections; a short one stays noisier, which the denoiser
-// then smooths. On motion-test (npm run motion, frame 60, Denoise 2), caps
-// of 32, 16, 8 and 4 gave errors of 6.5, 6.1, 5.6 and 5.3 (checked on
-// 2026-11-11). C2's session 3 makes this a slider.
-const MAX_MOVING_HISTORY = 4.0;
 
 // The unit ray last frame's camera aimed through a point on its screen.
 fn previousRay(pixel: vec2f) -> vec3f {
@@ -1345,6 +1339,9 @@ struct Reprojected {
 
 fn reproject(point: vec3f, surface: vec4f) -> Reprojected {
   var result: Reprojected; // all zero: nothing found
+  if (frame.maxHistory <= 0.0) {
+    return result; // History slider at 0: every moving frame starts over, as before C2
+  }
   // Behind last frame's camera, it can't have been on screen.
   if (dot(point - frame.previousCameraPos, frame.previousCameraForward) <= 0.0) {
     return result;
@@ -1385,11 +1382,14 @@ fn reproject(point: vec3f, surface: vec4f) -> Reprojected {
   result.record.light /= weights;
   result.record.albedo /= weights;
   result.record.noiseFree /= weights;
-  // While moving, older samples count for less, so blur and stale light
-  // fade instead of piling up (C2 session 3 will make this smarter).
+  // While moving, history counts as at most frame.maxHistory samples (the
+  // History slider), so older samples fade: their lighting from other
+  // viewpoints, and the blur each frame's lookup between pixels adds.
+  // Standing still there's no cap, so a still picture converges fully.
+  // Short is noisy but crisp; long is smooth but smears and lags.
   let count = result.record.albedo.a;
-  if (count > MAX_MOVING_HISTORY) {
-    let keep = MAX_MOVING_HISTORY / count;
+  if (count > frame.maxHistory) {
+    let keep = frame.maxHistory / count;
     result.record.light *= keep;
     result.record.albedo *= keep;
     result.record.noiseFree *= keep;

@@ -22,7 +22,8 @@ export const SLOW_PACE_MS = 250; // 4 samples per second
 
 // Everything the image depends on, apart from which sample this is. The
 // last frame's camera isn't part of the picture, only of how it got there.
-export type ImageInputs = Omit<FrameParams, 'sampleIndex' | 'previousCamera' | 'cameraMoved'>;
+// How much history a moving camera keeps doesn't change a still picture.
+export type ImageInputs = Omit<FrameParams, 'sampleIndex' | 'previousCamera' | 'cameraMoved' | 'maxHistory'>;
 
 export interface SampleCounter {
   // Samples since the picture last started over. Moving the camera doesn't

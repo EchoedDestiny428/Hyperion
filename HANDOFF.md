@@ -20,7 +20,7 @@ For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of
 
 Each needing approval first:
 
-1. The temporal steps, in the order under "Order of the temporal steps" in `docs/PLAN.md`. Sessions 1 (groundwork) and 2 (reprojection and rejection) are done; next is session 3, fading history, which turns the fixed history cap into a slider. Measure every step with `npm run motion` against the numbers below.
+1. The temporal steps, in the order under "Order of the temporal steps" in `docs/PLAN.md`. Sessions 1 to 3 (groundwork, reprojection and rejection, fading history) are done. Next: decide whether the two session 3 experiments are worth trying (sharper history lookups, history that depends on motion; see the plan), then session 4, the denoiser on moving views. Session 4 also covers the noisy band at the screen's edge and behind columns: smooth pixels with little history harder. Measure every step with `npm run motion` against the numbers below.
 2. Optional, for the denoiser: glossy reflections and glass, which it still smooths as part of the surface they're seen on (steps 6 and 7); and fireflies, which it spreads into blobs.
 3. Optional: retest "any hit" shadow rays now that there's a BVH, since a shadow ray could stop walking the tree at its first blocker.
 

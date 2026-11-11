@@ -148,7 +148,9 @@ Also done along the way:
 **Order of the temporal steps** (decided 2026-11-11), each a working session:
 1. *Groundwork* (done 2026-11-11): a repeatable camera path (`?spin=`, `?turn=`) and `npm run motion` with the baseline error of moving views; last frame's camera and a motion-vector view (for step 3); two copies of the per-pixel records (step 2).
 2. *Reprojection and rejection* (steps 3–4; done 2026-11-11): moving the camera stops restarting the image; per-pixel sample counts; a history-length view. It took two pieces of session 3 early, because without them moving views got *worse* with the denoiser on: a fixed history cap while moving, and keeping only the lighting from history and recent samples' colors (the demodulation of step 6). Mirror images are now marked, so neither reprojection nor the denoiser mixes them with the real surface in the same plane.
-3. *Fading history* (step 5), with a History slider, and the HUD, Samples menu and Pace reworked for per-pixel counts.
+3. *Fading history* (step 5; done 2026-11-11): a History slider (0 to 64 samples carried over while moving, default 4); the HUD says what moving pixels hold; the Samples menu caps the history too; `npm run motion -- --history`. Two experiments are left for after it, kept only if `npm run motion` says they help:
+   - *proposed:* sharper history lookups, a 4×4 Catmull-Rom blend instead of the 2×2 bilinear one, which could make a longer history pay off;
+   - *proposed:* a history that depends on how fast the view moves.
 4. *The denoiser on moving views:* variance from each pixel's history; *proposed:* feeding the first filter pass back into history, if `npm run motion` says it helps.
 5. *Responding to change* (step 8): variance clipping, and "Sun moves" keeping history.
 6. *Wrap-up:* the remaining debug views (step 10), the learning note, and whether glossy reflections and glass (steps 6–7) come next.

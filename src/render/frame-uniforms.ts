@@ -10,7 +10,7 @@ import type { CameraBasis } from '../camera/orbit.ts';
 //                         8..10 cameraUp     11 time
 //                        12..14 cameraForward 15 renderer (u32)
 //                        16..17 resolution   18 view (u32)   19 sampleIndex (u32)
-//                        20 maxBounces (u32)  21 exposure  22 cameraMoved (u32)  23 padding
+//                        20 maxBounces (u32)  21 exposure  22 cameraMoved (u32)  23 maxHistory
 //                        24..26 previousCameraPos      27 padding
 //                        28..30 previousCameraRight    31 padding
 //                        32..34 previousCameraUp       35 padding
@@ -32,6 +32,7 @@ export interface FrameParams {
   exposure: number; // in stops: each one doubles the light before tone mapping
   previousCamera: CameraBasis; // the last frame's camera; `camera` again on the first frame
   cameraMoved: boolean; // camera isn't previousCamera, so pixels look up their history where their point was
+  maxHistory: number; // while moving, history counts as at most this many samples; 0 = none (historyCap in settings.ts)
 }
 
 export function packFrameUniforms(
@@ -59,6 +60,7 @@ export function packFrameUniforms(
   // picture is exactly what it was without exposure.
   out[21] = 2 ** p.exposure;
   ints[22] = p.cameraMoved ? 1 : 0;
+  out[23] = p.maxHistory;
   out.set(p.previousCamera.position, 24);
   out.set(p.previousCamera.right, 28);
   out.set(p.previousCamera.up, 32);

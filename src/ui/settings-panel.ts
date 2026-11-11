@@ -5,6 +5,7 @@ import {
   EXPOSURE_STEP,
   MAX_DENOISE_LEVEL,
   MAX_EXPOSURE,
+  MAX_HISTORY,
   MIN_EXPOSURE,
   RENDERER_NAMES,
   type RenderSettings,
@@ -14,6 +15,7 @@ import {
   denoiseLevel,
   denoiseReach,
   exposureText,
+  historyCap,
 } from '../render/settings.ts';
 
 export const RENDERER_TEXT: Record<Renderer, string> = {
@@ -74,6 +76,7 @@ export function attachSettingsPanel(
       settings.renderer = value as Renderer; // only RENDERER_NAMES are offered
       denoise.update();
       bounces.update();
+      history.update();
     },
   );
 
@@ -90,6 +93,7 @@ export function attachSettingsPanel(
       settings.view = value as View; // only VIEW_NAMES are offered
       denoise.update();
       exposure.update();
+      history.update();
     },
   );
 
@@ -142,6 +146,24 @@ export function attachSettingsPanel(
     notApplying: 'final image only',
     text: exposureText,
   });
+  const history = slider({
+    label: 'History ',
+    min: 0,
+    max: MAX_HISTORY,
+    get: () => settings.history,
+    set: (value) => {
+      settings.history = value;
+    },
+    // Only the path tracer's light is carried over while moving (reproject in tracer.wgsl).
+    applies: () => settings.renderer === 'path' && (settings.view === 'final' || settings.view === 'history'),
+    notApplying: 'path tracer, final image only',
+    text: (samples) => {
+      if (samples === 0) return 'off: moving starts over';
+      const cap = historyCap(settings);
+      const capped = cap < samples ? ` (Samples allows ${cap})` : '';
+      return `${samples} ${samples === 1 ? 'sample' : 'samples'} while moving${capped}`;
+    },
+  });
 
   container.append(
     labelled('Renderer ', rendererSelect),
@@ -150,8 +172,9 @@ export function attachSettingsPanel(
     denoise.element,
     bounces.element,
     exposure.element,
+    history.element,
     sunBox,
-    ...antiAliasingControls(settings, actions),
+    ...antiAliasingControls(settings, actions, () => history.update()),
   );
 
   // On a narrow screen the open panel would cover most of the picture.
@@ -168,7 +191,8 @@ export function attachSettingsPanel(
 
 // How many samples each pixel averages, and how fast they're added, so you
 // can compare "1x" with "16x" or watch the image build up sample by sample.
-function antiAliasingControls(settings: RenderSettings, actions: PanelActions): HTMLElement[] {
+// `onLimitChange` lets the History slider show when the limit caps it.
+function antiAliasingControls(settings: RenderSettings, actions: PanelActions, onLimitChange: () => void): HTMLElement[] {
   const heading = document.createElement('p');
   heading.className = 'heading';
   heading.textContent = 'Anti-aliasing';
@@ -178,6 +202,7 @@ function antiAliasingControls(settings: RenderSettings, actions: PanelActions): 
     String(settings.sampleLimit),
     (value) => {
       settings.sampleLimit = Number(value);
+      onLimitChange();
     },
   );
 
@@ -219,6 +244,9 @@ interface SliderOptions {
 //   the samples already taken.
 // - Bounces: the most surfaces a path visits (tracePath). Changing it
 //   changes the picture, so the samples start over.
+// - History: while the camera moves, how many samples each pixel carries
+//   over from earlier frames (historyCap in settings.ts). It doesn't change
+//   a still picture, so moving it doesn't start the samples over.
 // - Exposure: how much of the scene's light reaches the picture, in stops.
 //   Each scene starts at its own. Changing it also starts the samples over
 //   (MIN_EXPOSURE in settings.ts says why).

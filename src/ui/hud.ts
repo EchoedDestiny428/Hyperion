@@ -14,6 +14,9 @@ export interface HudFrame {
   pace: Pace;
   gpuTimes: readonly number[] | null; // recent GPU times in ms; null if they can't be measured
   camera: string; // which camera, e.g. "Orbit" or "Fly · 2.0 m/s"
+  // While the camera moves and pixels carry samples over: the most each may
+  // carry. null otherwise.
+  movingHistory: number | null;
 }
 
 export interface Hud {
@@ -40,7 +43,7 @@ export function createHud(element: HTMLElement, gpuLabel: string): Hud {
     ].join('\n');
   };
   render(
-    { renderer: '', width: 0, height: 0, samples: 0, sampleLimit: 1, pace: 'full', gpuTimes: [], camera: '' },
+    { renderer: '', width: 0, height: 0, samples: 0, sampleLimit: 1, pace: 'full', gpuTimes: [], camera: '', movingHistory: null },
     'measuring…',
   );
   element.hidden = false;
@@ -75,7 +78,14 @@ function gpuTimeText(times: readonly number[] | null): string {
   return `p50 ${ms(50)} · p95 ${ms(95)} · p99 ${ms(99)} ms (last ${times.length} frames drawn)`;
 }
 
-function sampleStatus(info: HudFrame): string {
+// What the Samples line says after the count. Exported for its test.
+export function sampleStatus(info: HudFrame): string {
+  // Moving, the count only covers samples since the camera last moved. Each
+  // pixel also carries some over from earlier frames.
+  if (info.movingHistory !== null) {
+    if (info.movingHistory === 0) return 'moving: 1 new per frame, none carried over';
+    return `moving: 1 new per frame, up to ${info.movingHistory + 1} per pixel`;
+  }
   if (info.samples >= info.sampleLimit) return 'done';
   if (info.pace === 'step') return 'press Next sample';
   return info.samples <= 1 ? 'hold still to refine' : 'refining';
