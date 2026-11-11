@@ -16,20 +16,15 @@ export const RENDERER_TEXT: Record<Renderer, string> = {
   path: 'Path tracer',
 };
 
-// Each view's menu name, and how to read its colors (shown on hover).
-const VIEW_TEXT: Record<View, { label: string; hint: string }> = {
-  final: { label: 'Final image', hint: 'The lit image.' },
-  color: { label: 'Material color', hint: "Each surface's color with no lighting, called albedo." },
-  normals: { label: 'Normals', hint: 'Which way each surface faces, as color: red = +x, green = up (+y), blue = +z.' },
-  distance: { label: 'Distance', hint: 'How far each ray travelled, mirror bounces included. Near is bright.' },
-  sunlight: {
-    label: 'Sunlight',
-    hint: 'White: the sun reaches it. Orange: something blocks the sun (a cast shadow). Blue: faces away from the sun. Black: sky.',
-  },
-  rays: {
-    label: 'Rays per pixel',
-    hint: 'Average rays traced per sample: 1 blue, 2 teal, 4 green, 8 yellow, 16 or more red.',
-  },
+// Each view's menu name. How to read their colors is in tracer.wgsl
+// (debugView, sunlightView, heat).
+const VIEW_TEXT: Record<View, string> = {
+  final: 'Final image',
+  color: 'Material color',
+  normals: 'Normals',
+  distance: 'Distance',
+  sunlight: 'Sunlight',
+  rays: 'Rays per pixel',
 };
 
 const PACE_TEXT: Record<Pace, string> = {
@@ -79,23 +74,19 @@ export function attachSettingsPanel(
     settings.cameraMode,
     (value) => actions.setCameraMode(value as CameraMode), // only CAMERA_TEXT's keys are offered
   );
-  cameraSelect.title =
-    'Orbit: drag or arrow keys to circle, scroll to zoom. Fly: WASD to move, Q/E down/up, hold Shift for faster, [ and ] for slower and faster, drag to look, scroll to zoom.';
 
   const viewSelect = select(
-    VIEW_NAMES.map((name) => [name, VIEW_TEXT[name].label]),
+    VIEW_NAMES.map((name) => [name, VIEW_TEXT[name]]),
     settings.view,
     (value) => {
       settings.view = value as View; // only VIEW_NAMES are offered
-      viewSelect.title = VIEW_TEXT[settings.view].hint;
       denoise.update();
     },
   );
-  viewSelect.title = VIEW_TEXT[settings.view].hint;
 
+  // A moving sun changes the image every frame, so it never refines.
   const sunBox = checkbox(
     'Sun moves',
-    'Tick to make the sun circle. The image only refines while nothing moves, so it stays rough.',
     settings.sunMoves,
     (on) => {
       settings.sunMoves = on;
@@ -158,8 +149,9 @@ function antiAliasingControls(settings: RenderSettings, actions: PanelActions): 
 }
 
 // The Denoise slider: 0 is off, and each step adds a filter pass that
-// reaches twice as far (denoise.wgsl). It moves freely on a finished image:
-// the frame loop redraws from the samples already taken.
+// reaches twice as far (denoise.wgsl), removing coarser blotches but able
+// to smear finer detail. It moves freely on a finished image: the frame
+// loop redraws from the samples already taken.
 function denoiseSlider(settings: RenderSettings): { element: HTMLLabelElement; update(): void } {
   const input = document.createElement('input');
   input.type = 'range';
@@ -190,10 +182,6 @@ function denoiseSlider(settings: RenderSettings): { element: HTMLLabelElement; u
 
   const label = document.createElement('label');
   label.className = 'slider';
-  label.title =
-    'Smooths away the grain the path tracer leaves, keeping edges: each pixel is averaged with neighbors on the same surface whose brightness differs by no more than the noise explains. ' +
-    'Each step adds a pass reaching twice as far, which removes coarser blotches but can smear fine detail. ' +
-    'The filter does less as more samples come in.';
   label.append('Denoise ', value, input);
   return { element: label, update };
 }
@@ -232,14 +220,13 @@ function button(text: string, onClick: () => void): HTMLButtonElement {
   return element;
 }
 
-function checkbox(text: string, hint: string, checked: boolean, onToggle: (on: boolean) => void): HTMLLabelElement {
+function checkbox(text: string, checked: boolean, onToggle: (on: boolean) => void): HTMLLabelElement {
   const input = document.createElement('input');
   input.type = 'checkbox';
   input.checked = checked;
   input.addEventListener('change', () => onToggle(input.checked));
 
   const label = document.createElement('label');
-  label.title = hint;
   label.append(input, ` ${text}`);
   return label;
 }

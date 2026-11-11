@@ -62,7 +62,7 @@ export function createDenoisePass(device: GPUDevice, format: GPUTextureFormat): 
     raw: show('showRaw'),
   };
 
-  // Each pass's grid spacing (1, 2, 4, 8, 16 pixels), in its own small
+  // Each pass's grid spacing (1, 2, 4 … 512 pixels), in its own small
   // uniform buffer, written once. The shader reads one u32; the buffer holds
   // a whole vec4's worth (16 bytes), the unit uniform data is laid out in.
   const spacings = Array.from({ length: MAX_DENOISE_LEVEL }, (_, k) =>

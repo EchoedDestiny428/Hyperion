@@ -36,7 +36,7 @@ export function createHud(element: HTMLElement, gpuLabel: string): Hud {
       `Frame    ${frameText}`,
       `GPU time ${gpuTimeText(info.gpuTimes)}`,
       `Samples  ${info.samples} / ${info.sampleLimit} (${sampleStatus(info)})`,
-      `Camera   ${info.camera}`, // the key bindings are in the Camera menu's tooltip
+      `Camera   ${info.camera}`, // the key bindings are in the README
     ].join('\n');
   };
   render(

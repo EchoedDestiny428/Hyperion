@@ -132,7 +132,7 @@ The target is an ordinary laptop: an Intel Iris Xe integrated GPU, often on batt
 
 **Order** (decided 2026-11-10): start with the edge-aware spatial filter (step 9), because it also cleans up still images and needs no reprojection. Even at 1,024 samples, the dreamspace's indirectly lit walls stay visibly grainy. Measure it with `npm run noise`, both how much cleaner it gets and what it smears. Then the temporal steps.
 
-**Done so far:** the spatial filter for still images (step 9), as a Denoise slider in the Renderer panel, from 0 (off) to 5 passes, default 2. It brings parts of steps 1 and 6 with it:
+**Done so far:** the spatial filter for still images (step 9), as a Denoise slider in the Renderer panel, from 0 (off) to 10 passes, default 2. It brings parts of steps 1 and 6 with it:
 - a G-buffer of color, normal and distance, which looks through perfect mirrors to what they show;
 - demodulation;
 - a test that mixes only neighbors of similar color, since a surface's glint and haze aren't in proportion to its color.

@@ -34,6 +34,6 @@ test("only the path tracer's final image is denoised", () => {
 test('denoise reach doubles plus two with each pass', () => {
   assert.deepEqual(
     Array.from({ length: MAX_DENOISE_LEVEL + 1 }, (_, level) => denoiseReach(level)),
-    [0, 2, 6, 14, 30, 62],
+    [0, 2, 6, 14, 30, 62, 126, 254, 510, 1022, 2046],
   );
 });

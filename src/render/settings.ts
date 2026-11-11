@@ -57,8 +57,10 @@ export function defaultSettings(): RenderSettings {
 }
 
 // The Denoise slider: how many filter passes run (denoise.wgsl). Each pass
-// spreads its 5×5 grid twice as wide as the last: 1, 2, 4, 8, 16 pixels.
-export const MAX_DENOISE_LEVEL = 5;
+// spreads its 5×5 grid twice as wide as the last: 1, 2, 4 … 512 pixels.
+// Past about 5, the grid's points land so far apart (often off the screen)
+// that more passes change little; the slider goes to 10 to let you see that.
+export const MAX_DENOISE_LEVEL = 10;
 
 // The passes the image actually gets. Only the path tracer's lit image is
 // denoised: the Whitted renderer has no noise to remove, and smoothing a

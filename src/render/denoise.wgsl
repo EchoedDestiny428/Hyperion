@@ -9,9 +9,9 @@
 // 1. prepare: per pixel, the light arriving at the surface with the
 //    surface's own color divided out ("illumination"), and how noisy that
 //    still is (its variance).
-// 2. atrous, run 1 to 5 times: each pixel becomes a weighted average of a
-//    5×5 grid of pixels around it, spaced 1, 2, 4, 8 and then 16 pixels
-//    apart. Neighbors on a different surface, or brighter or darker than the
+// 2. atrous, run 1 to 10 times: each pixel becomes a weighted average of a
+//    5×5 grid of pixels around it, spaced 1, 2, 4, 8 … pixels apart,
+//    doubling each time. Neighbors on a different surface, or brighter or darker than the
 //    noise explains, get little or no weight, so edges stay sharp.
 // 3. show: multiply the surface color back in, then tone map, as the tracer
 //    does for the plain image.
@@ -67,7 +67,7 @@ fn encodeSrgb(linear: vec3f) -> vec3f {
 // pixel's new value needs its neighbors' old ones.
 @group(0) @binding(2) var<storage, read> illuminationIn: array<vec4f>;
 @group(0) @binding(3) var<storage, read_write> illuminationOut: array<vec4f>;
-@group(0) @binding(4) var<uniform> spacing: u32; // atrous: pixels between grid points, 1 to 16
+@group(0) @binding(4) var<uniform> spacing: u32; // atrous: pixels between grid points, 1 to 512
 // What neighbors are compared by (Guide), packed into 16 bytes per pixel:
 // prepare writes it once, and every pass reads it 25 times per pixel.
 @group(0) @binding(5) var<storage, read_write> guideOut: array<vec4u>;

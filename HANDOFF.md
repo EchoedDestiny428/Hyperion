@@ -5,7 +5,7 @@ For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of
 ## Where things stand
 
 - **Branch:** `c2-denoising`, branched from `main`. C1 is finished and merged into `main` (2026-11-10); `c1-path-tracer` stays on GitHub as a record.
-- **C2 so far:** the spatial denoiser for still images, the Denoise slider in the Renderer panel (0 = off, up to 5 passes, default 2). See "Done so far" under C2 in `docs/PLAN.md`, and `docs/learn/C2.md`.
+- **C2 so far:** the spatial denoiser for still images, the Denoise slider in the Renderer panel (0 = off, up to 10 passes, default 2). See "Done so far" under C2 in `docs/PLAN.md`, and `docs/learn/C2.md`.
 - **C1 is done** (see `docs/PLAN.md`):
   - chunk 1: GPU random numbers, progressive accumulation, anti-aliasing;
   - chunk 2: path tracer (bounce light, sky light, soft sun shadows, Russian roulette), the Renderer menu (Whitted kept for comparison), GPU timing;
