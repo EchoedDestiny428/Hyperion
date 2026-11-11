@@ -13,6 +13,7 @@ test('fields land at the offsets struct Frame in tracer.wgsl expects', () => {
     view: 3,
     sampleIndex: 77,
     maxBounces: 12,
+    exposure: -1,
   });
   assert.equal(u.length, FRAME_UNIFORM_FLOATS);
   assert.equal(u.byteLength % 16, 0); // uniform structs are sized in 16-byte steps
@@ -24,6 +25,7 @@ test('fields land at the offsets struct Frame in tracer.wgsl expects', () => {
   assert.equal(u[11], 42);
   assert.deepEqual([...u.subarray(12, 15)], [10, 11, 12]);
   assert.deepEqual([...u.subarray(16, 18)], [1920, 1080]);
+  assert.equal(u[21], 0.5); // -1 stop halves the light
 
   // The integer fields must hold the integers themselves, not float bit patterns.
   const ints = new Uint32Array(u.buffer);

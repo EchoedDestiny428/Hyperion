@@ -39,6 +39,7 @@ export interface RenderSettings {
   pace: Pace;
   denoise: number; // filter passes, 0 (off) to MAX_DENOISE_LEVEL
   bounces: number; // path tracer: the most surfaces one path visits, 1 to MAX_BOUNCES
+  exposure: number; // in stops, MIN_EXPOSURE to MAX_EXPOSURE; each scene sets its own
 }
 
 export function defaultSettings(): RenderSettings {
@@ -55,7 +56,21 @@ export function defaultSettings(): RenderSettings {
     // every scene cleaner at 4, 16 and 64 samples, and smears the least.
     denoise: 2,
     bounces: DEFAULT_BOUNCES,
+    exposure: 0,
   };
+}
+
+// The Exposure slider, in photographers' "stops": each one doubles (or
+// halves) the light reaching the picture, before tone mapping. Changing it
+// starts the samples over, because lights and sky seen directly are tone
+// mapped one sample at a time (isNoiseFree in tracer.wgsl).
+export const MIN_EXPOSURE = -3;
+export const MAX_EXPOSURE = 3;
+export const EXPOSURE_STEP = 0.5;
+
+export function exposureText(stops: number): string {
+  if (stops === 0) return '0 stops';
+  return `${stops > 0 ? '+' : '−'}${Math.abs(stops)} ${Math.abs(stops) === 1 ? 'stop' : 'stops'}`;
 }
 
 // The Bounces slider (tracePath in tracer.wgsl). 8 was C1's fixed limit: on

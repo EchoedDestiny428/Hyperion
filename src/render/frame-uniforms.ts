@@ -10,9 +10,9 @@ import type { CameraBasis } from '../camera/orbit.ts';
 //                         8..10 cameraUp     11 time
 //                        12..14 cameraForward 15 renderer (u32)
 //                        16..17 resolution   18 view (u32)   19 sampleIndex (u32)
-//                        20 maxBounces (u32)  21..23 padding
-// A uniform struct's size rounds up to a multiple of 16 bytes, so the one
-// value after the first 80 bytes takes 16.
+//                        20 maxBounces (u32)  21 exposure  22..23 padding
+// A uniform struct's size rounds up to a multiple of 16 bytes, so the two
+// values after the first 80 bytes take 16.
 export const FRAME_UNIFORM_FLOATS = 24; // = 96 bytes
 
 export interface FrameParams {
@@ -25,6 +25,7 @@ export interface FrameParams {
   view: number; // a value of VIEWS in settings.ts
   sampleIndex: number; // samples already in the running total; 0 = start over (accumulation.ts)
   maxBounces: number; // path tracer: the most surfaces one path visits
+  exposure: number; // in stops: each one doubles the light before tone mapping
 }
 
 export function packFrameUniforms(
@@ -48,5 +49,8 @@ export function packFrameUniforms(
   ints[18] = p.view;
   ints[19] = p.sampleIndex;
   ints[20] = p.maxBounces;
+  // The shader wants the multiplier. 2^0 is exactly 1, so at 0 stops the
+  // picture is exactly what it was without exposure.
+  out[21] = 2 ** p.exposure;
   return out;
 }

@@ -39,6 +39,7 @@ const sceneSliders = requireElement('scene-sliders', HTMLElement);
 let scene = initialScene();
 const settings = defaultSettings();
 settings.cameraMode = scene.cameraMode ?? 'orbit';
+settings.exposure = scene.exposure ?? 0;
 
 // Two cameras; settings.cameraMode says which one is in use. The orbit starts
 // as a copy of the scene's view, so moving doesn't edit the layout.
@@ -91,6 +92,7 @@ attachScenePicker(sceneSelect, SCENES, scene, (picked) => {
   Object.assign(orbit, picked.camera);
   Object.assign(fly, flyFromOrbit(orbit, fly.speed));
   settings.cameraMode = picked.cameraMode ?? 'orbit';
+  settings.exposure = picked.exposure ?? 0;
   panel.sync();
   showSliders(picked);
   rememberScene(picked);
@@ -165,6 +167,7 @@ async function start(): Promise<void> {
       renderer: RENDERERS[settings.renderer],
       view: VIEWS[settings.view],
       maxBounces: settings.bounces,
+      exposure: settings.exposure,
     };
     samples.check(inputs, scene);
     // Restart, or lower the limit below what the image already holds: start over.

@@ -32,6 +32,7 @@ struct Frame {
   view: u32, // one of VIEW_*
   sampleIndex: u32, // samples already in the running total; 0 = start over
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
+  exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
   // WGSL rounds the struct up to 96 bytes, a multiple of 16.
 }
 
@@ -60,12 +61,12 @@ fn encodeSrgb(linear: vec3f) -> vec3f {
 
 fn screenColor(restMean: vec3f, noiseFree: vec4f, count: f32) -> vec3f {
   if (noiseFree.a == 0.0) {
-    return encodeSrgb(toneMap(restMean));
+    return encodeSrgb(toneMap(restMean * frame.exposure));
   }
   let rest = count - noiseFree.a;
   var sum = noiseFree.rgb;
   if (rest > 0.0) {
-    sum += rest * toneMap(restMean);
+    sum += rest * toneMap(restMean * frame.exposure);
   }
   return encodeSrgb(sum / count);
 }

@@ -3,6 +3,7 @@ import { ballTest1 } from './layouts/ball-test-1.ts';
 import { cornellBox } from './layouts/cornell-box.ts';
 import { dreamspace } from './layouts/dreamspace.ts';
 import { materialTest } from './layouts/material-test.ts';
+import { motionTest } from './layouts/motion-test.ts';
 import { neonNight } from './layouts/neon-night.ts';
 import { shadowHeights } from './layouts/shadow-heights.ts';
 import type { Scene } from './scene.ts';
@@ -16,6 +17,7 @@ export const SCENES: readonly Scene[] = [
   materialTest,
   cornellBox,
   neonNight,
+  motionTest,
   dreamspace,
 ];
 

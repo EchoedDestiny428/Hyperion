@@ -33,7 +33,7 @@ const scene: Scene = {
     { center: [5, 6, 7], radius: 8, material: 'floor' },
   ],
   boxes: [{ center: [1, 2, 3], size: [2, 4, 6], rotation: [0, 90, 0], material: 'lamp' }],
-  environment: { sun: [0.5, 0.25, 0.125], sky: 0.5 },
+  environment: { sun: [0.5, 0.25, 0.125], sky: 0.5, sunElevation: 45, sunAzimuth: 90 },
 };
 
 const wgsl = readFileSync(new URL('../render/tracer.wgsl', import.meta.url), 'utf8');
@@ -49,6 +49,7 @@ test('scene info, spheres and materials land where tracer.wgsl expects', () => {
   assert.equal(packed.info.byteLength, SCENE_INFO_BYTES);
   assert.deepEqual([...new Uint32Array(packed.info).subarray(0, 4)], [2, 1, 1, 0]); // spheres, boxes, lights, ground
   assert.deepEqual([...new Float32Array(packed.info).subarray(4, 8)], [0.5, 0.25, 0.125, 0.5]); // sun, sky
+  close(new Float32Array(packed.info).subarray(8, 10), [1, Math.PI / 2]); // tan(45°), 90° in radians
 
   assert.equal(packed.spheres.byteLength, 2 * SPHERE_BYTES);
   const sphereFloats = new Float32Array(packed.spheres);
@@ -139,6 +140,8 @@ test('leaving things out: no ground, no boxes, no lights, default daylight', () 
   const ints = new Uint32Array(packed.info);
   assert.deepEqual([...ints.subarray(0, 4)], [0, 0, 0, NO_GROUND]);
   close(new Float32Array(packed.info).subarray(4, 8), [...DAYLIGHT.sun, DAYLIGHT.sky]);
+  // The sun where it always was, exactly, so old scenes draw the same.
+  assert.deepEqual([...new Float32Array(packed.info).subarray(8, 10)], [Math.fround(0.9), 0]);
   // A storage binding can't be empty, so each list still gets one slot.
   assert.equal(packed.spheres.byteLength, SPHERE_BYTES);
   assert.equal(packed.boxes.byteLength, BOX_BYTES);

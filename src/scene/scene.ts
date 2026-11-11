@@ -78,7 +78,15 @@ export function boxBetween(min: Vec3, max: Vec3, material: string): Box {
 export interface Environment {
   sun: Vec3; // the sun's color times its brightness
   sky: number; // multiplies the sky's brightness: 1 is daytime
+  // Where the sun is. A low sun casts long shadows. Left out, it's about 42°
+  // up, in the +x direction, as before scenes could choose.
+  sunElevation?: number; // degrees above the horizon, more than 0 and less than 90
+  sunAzimuth?: number; // degrees around the vertical: 0 is toward +x, 90 toward +z
 }
+
+// The default sun's direction is (1, 0.9, 0) before normalizing: 0.9 up for
+// each 1 across, which is atan(0.9), about 42°.
+const DEFAULT_SUN_HEIGHT = 0.9;
 
 export const DAYLIGHT: Environment = { sun: [1.6, 1.52, 1.36], sky: 1 };
 
@@ -91,6 +99,9 @@ export interface Scene {
   spheres: Sphere[];
   boxes?: Box[];
   environment?: Environment; // DAYLIGHT if left out
+  // The camera's exposure in stops (see MIN_EXPOSURE in render/settings.ts):
+  // below 0 for a bright scene, so it isn't washed out. 0 if left out.
+  exposure?: number;
   sliders?: HeightSlider[]; // shown under the Scene menu while this scene is picked
 }
 
@@ -127,7 +138,8 @@ export const NO_GROUND = 0xffffffff;
 // columns, each padded to 16 bytes. https://www.w3.org/TR/WGSL/#alignment-and-size
 //
 //   SceneInfo  slot 0 sphereCount  1 boxCount  2 lightCount  3 groundMaterial (all u32)
-//              4..6 sunColor  7 skyStrength
+//              4..6 sunColor  7 skyStrength  8 sunHeight  9 sunAzimuth (radians)
+//              10..11 (padding: a uniform struct's size rounds up to 16 bytes)
 //   Sphere     slot 0..2 center  3 radius  4 material (u32)  5 lightDensity  6..7 (padding)
 //   Box        slot 0..2 center  3 material (u32)  4..6 halfSize  7 lightDensity
 //              8..10, 12..14, 16..18 rotation columns  11, 15, 19 (padding)
@@ -135,7 +147,7 @@ export const NO_GROUND = 0xffffffff;
 //              8..10 emission (color × strength)  11 metallic  12 ior  13 transmission
 //              14 groutWidth (0: not tiles)  15 (padding)
 //   Light      slot 0 kind (u32)  1 index (u32)  2 cdf  3 probability
-export const SCENE_INFO_BYTES = 32;
+export const SCENE_INFO_BYTES = 48;
 export const SPHERE_BYTES = 32;
 export const BOX_BYTES = 80;
 export const MATERIAL_BYTES = 64;
@@ -168,6 +180,10 @@ export function packScene(scene: Scene): PackedScene {
   }
   const lights = findLights(scene, boxes);
   const environment = scene.environment ?? DAYLIGHT;
+  const { sunElevation, sunAzimuth = 0 } = environment;
+  if (sunElevation !== undefined && !(sunElevation > 0 && sunElevation < 90)) {
+    throw new Error(`Scene "${scene.name}" has the sun ${sunElevation}° up; it must be more than 0 and less than 90`);
+  }
 
   // Each struct mixes f32 and u32 fields, so each buffer gets two views of
   // the same bytes: one for writing floats, one for writing integers.
@@ -180,6 +196,10 @@ export function packScene(scene: Scene): PackedScene {
   infoInts[3] = scene.ground === undefined ? NO_GROUND : materialIndex(scene.ground);
   infoFloats.set(environment.sun, 4);
   infoFloats[7] = environment.sky;
+  // The shader builds the direction as (cos, height, sin) of the azimuth, so
+  // the elevation becomes a height per unit across: its tangent.
+  infoFloats[8] = sunElevation === undefined ? DEFAULT_SUN_HEIGHT : Math.tan((sunElevation * Math.PI) / 180);
+  infoFloats[9] = (sunAzimuth * Math.PI) / 180;
 
   const materials = new ArrayBuffer(MATERIAL_BYTES * Math.max(materialEntries.length, 1));
   const materialFloats = new Float32Array(materials);

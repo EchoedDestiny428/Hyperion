@@ -23,6 +23,7 @@ struct Frame {
   view: u32, // one of VIEW_*
   sampleIndex: u32, // samples already in the running total; 0 = start over
   maxBounces: u32, // path tracer: the most surfaces one path visits (the Bounces slider)
+  exposure: f32, // light is multiplied by this before tone mapping: 2^stops (the Exposure slider)
   // WGSL rounds the struct up to 96 bytes, a multiple of 16.
 }
 
@@ -66,6 +67,9 @@ struct SceneInfo {
   groundMaterial: u32, // index into materials, or NO_GROUND
   sunColor: vec3f, // the sun's color times its brightness
   skyStrength: f32, // multiplies the sky: 1 is daytime
+  sunHeight: f32, // how far up the sun is per unit across: tan(elevation)
+  sunAzimuth: f32, // radians around the vertical, from +x toward +z
+  // WGSL rounds the struct up to 48 bytes, a multiple of 16.
 }
 
 const NO_GROUND = 4294967295u; // 0xffffffff: this scene has no ground plane
@@ -433,9 +437,10 @@ const SUN_SOLID_ANGLE = 2.0 * PI * (1.0 - cos(SUN_ANGULAR_RADIUS));
 const SUN_PDF = 1.0 / SUN_SOLID_ANGLE;
 
 fn sunDirection() -> vec3f {
-  // The sun can circle ("Sun moves") to show that shadows are computed live.
-  let angle = frame.time * 0.15;
-  return normalize(vec3f(cos(angle), 0.9, sin(angle)));
+  // Each scene places it (Environment in scene.ts). It can also circle
+  // ("Sun moves") to show that shadows are computed live.
+  let angle = frame.time * 0.15 + scene.sunAzimuth;
+  return normalize(vec3f(cos(angle), scene.sunHeight, sin(angle)));
 }
 
 // A random direction toward some point on the sun's disk. Shadow rays aimed
@@ -1318,14 +1323,18 @@ fn isNoiseFree() -> bool {
 // how many samples each has. `restMean` is the rest's average light (maybe
 // denoised). With no noise-free samples, it's just the tone-mapped average.
 // denoise.wgsl has a copy (denoise.test.ts checks they match).
+//
+// Exposure scales the light first, as a camera's shutter and aperture do:
+// the scene stays as it is, only how much of its light reaches the picture
+// changes. The noise-free samples were already scaled when they were added.
 fn screenColor(restMean: vec3f, noiseFree: vec4f, count: f32) -> vec3f {
   if (noiseFree.a == 0.0) {
-    return encodeSrgb(toneMap(restMean));
+    return encodeSrgb(toneMap(restMean * frame.exposure));
   }
   let rest = count - noiseFree.a;
   var sum = noiseFree.rgb;
   if (rest > 0.0) {
-    sum += rest * toneMap(restMean);
+    sum += rest * toneMap(restMean * frame.exposure);
   }
   return encodeSrgb(sum / count);
 }
@@ -1389,7 +1398,7 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   var total = vec4f(value, luminance(value) * luminance(value));
   var noiseFreeTotal = vec4f(0.0);
   if (noiseFree) {
-    noiseFreeTotal = vec4f(toneMap(value), 1.0);
+    noiseFreeTotal = vec4f(toneMap(value * frame.exposure), 1.0);
     total = vec4f(0.0);
   }
   let foundSurface = select(0.0, 1.0, firstSurface.w < NO_HIT);

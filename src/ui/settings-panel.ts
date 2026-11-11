@@ -2,7 +2,10 @@ import { type Pace, SAMPLE_LIMITS } from '../render/accumulation.ts';
 import {
   type CameraMode,
   MAX_BOUNCES,
+  EXPOSURE_STEP,
   MAX_DENOISE_LEVEL,
+  MAX_EXPOSURE,
+  MIN_EXPOSURE,
   RENDERER_NAMES,
   type RenderSettings,
   type Renderer,
@@ -10,6 +13,7 @@ import {
   type View,
   denoiseLevel,
   denoiseReach,
+  exposureText,
 } from '../render/settings.ts';
 
 export const RENDERER_TEXT: Record<Renderer, string> = {
@@ -83,6 +87,7 @@ export function attachSettingsPanel(
     (value) => {
       settings.view = value as View; // only VIEW_NAMES are offered
       denoise.update();
+      exposure.update();
     },
   );
 
@@ -121,6 +126,20 @@ export function attachSettingsPanel(
     notApplying: 'path tracer only',
     text: (count) => (count === 1 ? '1 (direct light only)' : String(count)),
   });
+  const exposure = slider({
+    label: 'Exposure ',
+    min: MIN_EXPOSURE,
+    max: MAX_EXPOSURE,
+    step: EXPOSURE_STEP,
+    get: () => settings.exposure,
+    set: (value) => {
+      settings.exposure = value;
+    },
+    // The debug views are false color, not light, so they have no exposure.
+    applies: () => settings.view === 'final',
+    notApplying: 'final image only',
+    text: exposureText,
+  });
 
   container.append(
     labelled('Renderer ', rendererSelect),
@@ -128,6 +147,7 @@ export function attachSettingsPanel(
     labelled('View ', viewSelect),
     denoise.element,
     bounces.element,
+    exposure.element,
     sunBox,
     ...antiAliasingControls(settings, actions),
   );
@@ -138,6 +158,8 @@ export function attachSettingsPanel(
   return {
     sync() {
       cameraSelect.value = settings.cameraMode;
+      // A new scene brings its own exposure.
+      exposure.update();
     },
   };
 }
@@ -180,6 +202,7 @@ interface SliderOptions {
   label: string;
   min: number;
   max: number;
+  step?: number; // 1 if left out
   get(): number;
   set(value: number): void;
   applies(): boolean; // false disables it
@@ -194,16 +217,20 @@ interface SliderOptions {
 //   the samples already taken.
 // - Bounces: the most surfaces a path visits (tracePath). Changing it
 //   changes the picture, so the samples start over.
+// - Exposure: how much of the scene's light reaches the picture, in stops.
+//   Each scene starts at its own. Changing it also starts the samples over
+//   (MIN_EXPOSURE in settings.ts says why).
 function slider(options: SliderOptions): { element: HTMLLabelElement; update(): void } {
   const input = document.createElement('input');
   input.type = 'range';
   input.min = String(options.min);
   input.max = String(options.max);
-  input.step = '1';
+  input.step = String(options.step ?? 1);
   input.value = String(options.get());
 
   const value = document.createElement('span');
   const update = (): void => {
+    input.value = String(options.get()); // in case something else changed it
     const applies = options.applies();
     input.disabled = !applies;
     value.textContent = applies ? options.text(options.get()) : options.notApplying;
