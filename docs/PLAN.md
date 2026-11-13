@@ -152,7 +152,11 @@ Also done along the way:
    - sharper history lookups, a 4×4 Catmull-Rom blend instead of the 2×2 one: 2–5% better with the denoiser, slightly worse without, for 4× the history reads;
    - a history that depends on how fast the view moves: worse with the denoiser at every speed tried.
 4. *The denoiser on moving views* (done 2026-11-13): a scripted walk to measure the dreamspace; pixels that just came into view borrow their neighbors' noise level; one more filter pass while moving. Feeding the first filter pass back into history was tried and dropped (worse on both tests). Measuring showed most of the remaining moving error isn't in newly revealed pixels: the dreamspace walk is limited by noise, `motion-test` by blur.
-5. *Responding to change* (step 8): variance clipping, and "Sun moves" keeping history.
+5. *Responding to change* (step 8; done 2026-11-13): "Sun moves" keeps a short history instead of restarting; a test that drops a pixel's history where its new sample clearly disagrees with it (a per-pixel stand-in for variance clipping); a repeatable moving-sun test (`?sun=`); a "History thrown away" view (part of step 10). Still *proposed*, to decide after:
+   - true neighborhood variance clipping, which needs this frame's samples in a buffer of their own, and the tracer's fragment shader is already at WebGPU's default 8 storage buffers;
+   - scene sliders keeping history when an object moves;
+   - short history for direct sunlight and long for bounced light (more memory per pixel);
+   - the A-SVGF change map.
 6. *Wrap-up:* the remaining debug views (step 10), the learning note, and whether glossy reflections and glass (steps 6–7) come next.
 
 Several samples per frame comes after session 3, since it depends on per-pixel counts.

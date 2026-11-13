@@ -24,6 +24,7 @@ export const VIEWS = {
   rays: 5, // how many rays the pixel cost
   motion: 6, // how far and which way each point moved on screen since the last frame
   history: 7, // how many samples each pixel holds, which differs once the camera has moved
+  discarded: 8, // where history was thrown away this frame, and why
 } as const;
 
 export type View = keyof typeof VIEWS;
@@ -94,6 +95,10 @@ export function exposureText(stops: number): string {
 // the Cornell box, going to 64 changed the result by under 0.5%.
 export const DEFAULT_BOUNCES = 8;
 export const MAX_BOUNCES = 64;
+
+// How fast the sun circles while "Sun moves" is ticked: sunDirection in
+// tracer.wgsl turns it by frame.time × this (settings.test.ts checks).
+export const SUN_RADIANS_PER_SECOND = 0.15;
 
 // The Denoise slider: how many filter passes run (denoise.wgsl). Each pass
 // spreads its 5×5 grid twice as wide as the last: 1, 2, 4 … 512 pixels.

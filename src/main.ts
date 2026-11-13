@@ -3,7 +3,7 @@
 
 import { type Fly, attachFlyControls, flyBasis, flyFromOrbit, moveFly, orbitFromFly } from './camera/fly.ts';
 import { type CameraBasis, type Orbit, attachOrbitControls, orbitBasis, spinOrbit } from './camera/orbit.ts';
-import { parseCameraPath, spinYaw, walkPosition } from './camera/path.ts';
+import { parseCameraPath, spinYaw, sunSeconds as sunSecondsOnPath, walkPosition } from './camera/path.ts';
 import { trackCanvasSize } from './gpu/canvas.ts';
 import { createDevice, describeAdapter, shouldRestart } from './gpu/device.ts';
 import { createGpuTimer, firstAndLast } from './gpu/timer.ts';
@@ -59,7 +59,13 @@ const flyControls = attachFlyControls(
   () => setCameraMode('fly'), // pressing W, A, S, D, Q or E while orbiting
 );
 
-// ?spin=, ?walk=, ?turn= and ?ahead= (camera/path.ts): a camera move that's
+// The sun's position comes from this clock, which runs while "Sun moves" is
+// ticked, or a ?sun= path turns it. It's declared before the path code below,
+// which may set it. While the sun moves, each pixel keeps only a short
+// history and drops it where the light clearly changed (tracer.wgsl).
+let sunSeconds = 0;
+
+// ?spin=, ?walk=, ?sun=, ?turn=, ?ahead= and ?sunturn= (camera/path.ts): a camera move that's
 // the same every time, for scripts/motion.ts. P starts it, or starts it
 // again. A spin turns the orbit camera and a walk moves the fly camera, both
 // starting from the scene's view.
@@ -69,7 +75,7 @@ const pathStartYaw = orbit.yaw;
 const pathStartFly = { position: fly.position, yaw: fly.yaw };
 let pathStep: number | null = null; // frames moved since P was pressed; null before
 if (path) {
-  settings.cameraMode = path.kind === 'spin' ? 'orbit' : 'fly';
+  if (path.kind !== 'sun') settings.cameraMode = path.kind === 'spin' ? 'orbit' : 'fly';
   placeOnPath(0);
   canvas.dataset['path'] = 'ready';
   window.addEventListener('keydown', (event) => {
@@ -80,6 +86,7 @@ if (path) {
 function placeOnPath(step: number): void {
   if (path?.kind === 'spin') orbit.yaw = spinYaw(pathStartYaw, path, step);
   else if (path?.kind === 'walk') fly.position = walkPosition(pathStartFly, path, step);
+  else if (path?.kind === 'sun') sunSeconds = sunSecondsOnPath(path, step);
 }
 
 // The panel's buttons raise these flags, and the next frame acts on them.
@@ -123,10 +130,6 @@ attachScenePicker(sceneSelect, SCENES, scene, (picked) => {
 });
 trackCanvasSize(canvas);
 
-// The sun's position comes from this clock, which only runs while "Sun moves"
-// is ticked. A moving sun changes the image every frame, so the image can
-// only refine (accumulation.ts) while it stands still.
-let sunSeconds = 0;
 
 const deviceLossTimes: number[] = [];
 
@@ -172,6 +175,7 @@ async function start(): Promise<void> {
   let shownLevel = 0; // denoise passes in the image on screen
   let generation = 0; // counts changes of picture (restarts and camera moves), so the denoiser can tell them apart
   let previousCamera: CameraBasis | null = null; // the camera the last frame was drawn with
+  let previousSunSeconds: number | null = null; // and its sun
 
   // requestAnimationFrame calls us once per display refresh, just before the
   // browser paints. `now` is on the same clock as performance.now().
@@ -221,7 +225,7 @@ async function start(): Promise<void> {
     // moved on a finished image (which redraws it from the samples it holds,
     // without adding one). Otherwise skip the GPU work: without a new
     // texture from getCurrentTexture(), the canvas keeps showing the last image.
-    const level = denoiseLevel(settings, samples.moved);
+    const level = denoiseLevel(settings, samples.moved || samples.lit);
     // What the denoiser needs to know about the image, once this frame's sample is in.
     const image = (passes: number): FilterInputs => ({
       generation,
@@ -242,7 +246,8 @@ async function start(): Promise<void> {
         // Compared with the camera of the last frame drawn, which is what the
         // history was drawn with.
         const cameraMoved = previousCamera !== null && JSON.stringify(previousCamera) !== JSON.stringify(inputs.camera);
-        if (sampleIndex === 0 || cameraMoved) generation++;
+        const lightChanged = previousSunSeconds !== null && previousSunSeconds !== inputs.timeSeconds;
+        if (sampleIndex === 0 || cameraMoved || lightChanged) generation++;
         lastSampleTime = now;
         // The tracer draws the plain average; the denoiser, if on, then
         // draws over it. The GPU time covers both.
@@ -256,11 +261,13 @@ async function start(): Promise<void> {
             previousCamera: previousCamera ?? inputs.camera,
             cameraMoved,
             maxHistory: historyCap(settings),
+            lightChanged,
           },
           scene,
           level > 0 ? first : stamps,
         );
         previousCamera = inputs.camera;
+        previousSunSeconds = inputs.timeSeconds;
         const traced = pass.output(); // null if the canvas is too big to keep records for
         if (level > 0 && traced) denoiser.encode(encoder, canvasView, traced, image(level), last);
         shownLevel = traced ? level : 0;
@@ -282,7 +289,7 @@ async function start(): Promise<void> {
       sampleLimit: settings.sampleLimit,
       pace: settings.pace,
       // While moving, each pixel's history is what the HUD can't count.
-      movingHistory: samples.moved && reusesHistory(settings) ? historyCap(settings) : null,
+      movingHistory: (samples.moved || samples.lit) && reusesHistory(settings) ? historyCap(settings) : null,
     });
     requestAnimationFrame(frame);
   };

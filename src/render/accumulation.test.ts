@@ -28,7 +28,6 @@ test('the counter keeps its total while nothing changes', () => {
 test('any change to the inputs or the scene starts the total over', () => {
   const changes: ImageInputs[] = [
     { ...inputs, width: 801 },
-    { ...inputs, timeSeconds: 0.016 },
     { ...inputs, renderer: 0 },
     { ...inputs, view: 2 },
     { ...inputs, maxBounces: 3 },
@@ -64,6 +63,20 @@ test('moving the camera keeps the total, but the still count starts again', () =
   counter.check({ ...inputs, camera: { ...inputs.camera, position: [0, 1, 5.01] } }, ballTest1);
   assert.equal(counter.moved, false);
   assert.equal(counter.still, 1);
+});
+
+test('the sun moving keeps the total too, like the camera moving', () => {
+  const counter = createSampleCounter();
+  counter.check(inputs, ballTest1);
+  counter.take();
+  counter.check({ ...inputs, timeSeconds: 0.016 }, ballTest1);
+  assert.equal(counter.lit, true);
+  assert.equal(counter.moved, false);
+  assert.equal(counter.held, 1);
+  assert.equal(counter.still, 0);
+  counter.take();
+  counter.check({ ...inputs, timeSeconds: 0.016 }, ballTest1);
+  assert.equal(counter.lit, false);
 });
 
 test('restart empties the total', () => {

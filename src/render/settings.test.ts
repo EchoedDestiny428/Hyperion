@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SCENES } from '../scene/registry.ts';
+import { SUN_RADIANS_PER_SECOND } from './settings.ts';
 import {
   EXPOSURE_STEP,
   MAX_DENOISE_LEVEL,
@@ -77,4 +78,9 @@ test('a moving camera gets one more denoise pass, but off stays off', () => {
   assert.equal(denoiseLevel(settings, true), 3);
   assert.equal(denoiseLevel({ ...settings, denoise: 0 }, true), 0);
   assert.equal(denoiseLevel({ ...settings, denoise: MAX_DENOISE_LEVEL }, true), MAX_DENOISE_LEVEL);
+});
+
+test('the sun turns as fast as tracer.wgsl says', () => {
+  const wgsl = readFileSync(new URL('./tracer.wgsl', import.meta.url), 'utf8');
+  assert.match(wgsl, new RegExp(`frame\\.time \\* ${SUN_RADIANS_PER_SECOND}\\b`));
 });

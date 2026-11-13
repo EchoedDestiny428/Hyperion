@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCameraPath, spinYaw, walkPosition } from './path.ts';
+import { parseCameraPath, spinYaw, sunSeconds, walkPosition } from './path.ts';
 
 test('no path options, no path', () => {
   assert.deepEqual(parseCameraPath('?scene=dreamspace'), { path: null, problems: [] });
@@ -50,4 +50,14 @@ test('a walk goes straight ahead, level, and frame n matches ahead = n × walk',
   assert.deepEqual(walkPosition(start, walk, 60), walkPosition(start, ahead, 0));
   const [x, y, z] = walkPosition(start, walk, 50);
   assert.ok(Math.abs(x - 1) < 1e-12 && y === 1.6 && Math.abs(z - (2 - 1)) < 1e-12);
+});
+
+test('reads a sun path, and frame n matches sunturn = n × sun', () => {
+  const path = parseCameraPath('?sun=0.5&frames=40').path;
+  assert.deepEqual(path, { kind: 'sun', step: 0.5, frames: 40, start: 0 });
+  const turned = parseCameraPath('?sunturn=20').path;
+  assert.deepEqual(turned, { kind: 'sun', step: 0, frames: Infinity, start: 20 });
+  assert.ok(path && turned);
+  assert.equal(sunSeconds(path, 40), sunSeconds(turned, 0));
+  assert.equal(parseCameraPath('?sun=0.5&spin=1').problems.length, 1);
 });

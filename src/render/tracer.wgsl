@@ -29,6 +29,7 @@ struct Frame {
   // The camera the last frame was drawn with, to find where each point was
   // on screen then (its motion vector). The same as above while it's still.
   previousCameraPos: vec3f,
+  lightChanged: u32, // 1 if the light changed since the last frame (the sun moved): history is kept short and checked
   previousCameraRight: vec3f,
   previousCameraUp: vec3f,
   previousCameraForward: vec3f,
@@ -52,6 +53,7 @@ const VIEW_SUNLIGHT = 4u;
 const VIEW_RAYS = 5u;
 const VIEW_MOTION = 6u;
 const VIEW_HISTORY = 7u;
+const VIEW_DISCARDED = 8u;
 
 // ---- Full-screen triangle ------------------------------------------------
 // One triangle with corners (-1,-1), (3,-1), (-1,3) covers all of clip space
@@ -1342,6 +1344,7 @@ fn reproject(point: vec3f, surface: vec4f) -> Reprojected {
   if (frame.maxHistory <= 0.0) {
     return result; // History slider at 0: every moving frame starts over, as before C2
   }
+  historyFate = FATE_NO_MATCH;
   // Behind last frame's camera, it can't have been on screen.
   if (dot(point - frame.previousCameraPos, frame.previousCameraForward) <= 0.0) {
     return result;
@@ -1382,20 +1385,96 @@ fn reproject(point: vec3f, surface: vec4f) -> Reprojected {
   result.record.light /= weights;
   result.record.albedo /= weights;
   result.record.noiseFree /= weights;
-  // While moving, history counts as at most frame.maxHistory samples (the
-  // History slider), so older samples fade: their lighting from other
-  // viewpoints, and the blur each frame's lookup between pixels adds.
-  // Standing still there's no cap, so a still picture converges fully.
-  // Short is noisy but crisp; long is smooth but smears and lags.
-  let count = result.record.albedo.a;
+  result.record = capped(result.record);
+  result.found = true;
+  historyFate = FATE_KEPT;
+  return result;
+}
+
+// While the camera moves or the light changes, history counts as at most
+// frame.maxHistory samples (the History slider), so older samples fade:
+// their light from other viewpoints or an earlier sun, and the blur each
+// frame's lookup between pixels adds. Standing still there's no cap, so a
+// still picture converges fully. Short is noisy but crisp; long is smooth
+// but smears and lags.
+fn capped(record: PixelRecord) -> PixelRecord {
+  var result = record;
+  let count = record.albedo.a;
   if (count > frame.maxHistory) {
     let keep = frame.maxHistory / count;
-    result.record.light *= keep;
-    result.record.albedo *= keep;
-    result.record.noiseFree *= keep;
+    result.light *= keep;
+    result.albedo *= keep;
+    result.noiseFree *= keep;
   }
-  result.found = true;
   return result;
+}
+
+// ---- Light that changed ----------------------------------------------------
+// When the sun moves, a shadow can slide over a pixel: its history says
+// "sunlit" and its new sample says "shade". That history isn't noisy, it's
+// wrong, and keeping it leaves a ghost of the old shadow for as long as the
+// history lasts. One new sample is noisy too, though, so the test allows for
+// that: the history is thrown away only if the new sample is further from
+// its average than CHANGE_TOLERANCE times the spread its samples show, plus
+// a little. Glowing surfaces and sky seen directly (the noise-free samples)
+// have no noise to allow for, so any visible change counts.
+//
+// Only a sample much *darker* than the history counts, though. Path-traced
+// noise is lopsided: most samples of bounced light are dim, and now and then
+// one finds something bright (a firefly), far above the average. Counting
+// those as change dropped the history exactly when a firefly came, so the
+// pixel showed that one bright sample alone: white specks all over the
+// dreamspace with the sun moving, and a brighter picture overall once the
+// denoiser spread them. A sample can't fall far below its average that way,
+// so "much darker" means the light really went (a shadow arrived). Light
+// that really arrives is left to the history cap, which fades the old,
+// darker history within a few frames.
+const CHANGE_TOLERANCE = 4.0;
+const CHANGE_MARGIN = 0.1; // ... plus this share of the average, and a hair more for black
+const NOISE_FREE_CHANGE = 2.0 / 255.0; // a visible step in screen colors
+
+fn changedLight(history: PixelRecord, sample: PixelRecord) -> bool {
+  if (sample.noiseFree.a > 0.0) {
+    if (history.noiseFree.a < 0.5) {
+      return false;
+    }
+    let was = luminance(history.noiseFree.rgb / history.noiseFree.a);
+    return abs(luminance(sample.noiseFree.rgb) - was) > NOISE_FREE_CHANGE;
+  }
+  let rest = history.albedo.a - history.noiseFree.a;
+  if (rest < 2.0) {
+    return false; // too few samples to say how noisy they are
+  }
+  let mean = luminance(history.light.rgb) / rest;
+  let spread = sqrt(max(history.light.a / rest - mean * mean, 0.0) * rest / (rest - 1.0));
+  let now = luminance(sample.light.rgb);
+  return mean - now > CHANGE_TOLERANCE * spread + CHANGE_MARGIN * mean + 0.01;
+}
+
+// What happened to this pixel's history this frame, for VIEW_DISCARDED.
+const FATE_NONE = 0u; // nothing to carry over: standing still, or starting over
+const FATE_KEPT = 1u; // carried over (moving, or the light changed)
+const FATE_NO_MATCH = 2u; // moving, and nothing there showed this surface
+const FATE_STALE = 3u; // the light here clearly changed
+var<private> historyFate: u32;
+
+// Black: still, nothing to reuse. Dark green: history kept. Red: the
+// surface just came into view. Yellow: the light here changed.
+fn fateColor() -> vec3f {
+  switch historyFate {
+    case FATE_KEPT: {
+      return vec3f(0.05, 0.25, 0.08);
+    }
+    case FATE_NO_MATCH: {
+      return vec3f(0.9, 0.15, 0.1);
+    }
+    case FATE_STALE: {
+      return vec3f(0.95, 0.8, 0.1);
+    }
+    default: {
+      return vec3f(0.0);
+    }
+  }
 }
 
 // Reading the history between pixels blurs it a little, every frame, and
@@ -1567,9 +1646,9 @@ fn isNoiseFree() -> bool {
 }
 
 // The views that trace light and keep its running totals: the final image,
-// and the history-length view, which shows how many samples it holds.
+// and the two that show what happens to its history.
 fn showsLight() -> bool {
-  return frame.view == VIEW_FINAL || frame.view == VIEW_HISTORY;
+  return frame.view == VIEW_FINAL || frame.view == VIEW_HISTORY || frame.view == VIEW_DISCARDED;
 }
 
 // A pixel's color for the screen, over `count` samples: the noise-free ones'
@@ -1630,6 +1709,7 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   firstSurface = vec4f(0.0, 0.0, 0.0, NO_HIT);
   firstDepth = NO_HIT;
   directGlow = false;
+  historyFate = FATE_NONE;
   var value: vec3f;
   if (showsLight() || frame.view == VIEW_RAYS) {
     var light: vec3f;
@@ -1660,7 +1740,8 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
   let slot = pixelIndex.y * u32(frame.resolution.x) + pixelIndex.x;
   if (slot < arrayLength(&pixels)) {
     if (frame.sampleIndex > 0u) {
-      if (frame.cameraMoved == 0u) {
+      let changing = frame.cameraMoved != 0u || frame.lightChanged != 0u;
+      if (!changing) {
         // Standing still: the pixel's own record, as in C1.
         let earlier = history[slot];
         record.light += earlier.light;
@@ -1673,22 +1754,40 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
           record.surface = earlier.surface;
         }
       } else if (showsLight() && frame.renderer == RENDERER_PATH) {
-        // Moving: carry on from where this point was last frame, if that
-        // was the same surface. Otherwise it just came into view, and the
-        // pixel starts over from this sample.
-        let depth = select(firstDepth, FAR_AWAY, firstDepth >= NO_HIT);
-        let point = ray.origin + ray.dir * depth;
-        let earlier = reproject(point, firstSurface);
-        if (earlier.found) {
-          var history = earlier.record;
-          if (firstSurface.w < NO_HIT) {
-            history = recolored(history, firstColor);
+        var earlier: Reprojected;
+        if (frame.cameraMoved != 0u) {
+          // Moving: carry on from where this point was last frame, if that
+          // was the same surface. Otherwise it just came into view, and the
+          // pixel starts over from this sample.
+          let depth = select(firstDepth, FAR_AWAY, firstDepth >= NO_HIT);
+          let point = ray.origin + ray.dir * depth;
+          earlier = reproject(point, firstSurface);
+          if (earlier.found && firstSurface.w < NO_HIT) {
+            earlier.record = recolored(earlier.record, firstColor);
           }
-          record.light += history.light;
-          record.albedo += history.albedo;
-          record.noiseFree += history.noiseFree;
+          record.surface = surfaceForCenter(firstSurface, point, pixelIndex);
+        } else {
+          // Only the light changed (the sun moved): the camera didn't, so
+          // the pixel's own record still shows the same surface. It's kept
+          // short, like a moving camera's history.
+          let own = history[slot];
+          earlier = Reprojected(capped(own), frame.maxHistory > 0.0);
+          if (firstSurface.w >= NO_HIT || own.surface.w < NO_HIT) {
+            record.surface = own.surface;
+          }
+          historyFate = select(FATE_NONE, FATE_KEPT, earlier.found);
         }
-        record.surface = surfaceForCenter(firstSurface, point, pixelIndex);
+        // Light that has clearly changed since (a shadow moved over this
+        // spot) makes the history wrong, not just noisy: drop it.
+        if (earlier.found && frame.lightChanged != 0u && changedLight(earlier.record, record)) {
+          earlier.found = false;
+          historyFate = FATE_STALE;
+        }
+        if (earlier.found) {
+          record.light += earlier.record.light;
+          record.albedo += earlier.record.albedo;
+          record.noiseFree += earlier.record.noiseFree;
+        }
       }
       // The other renderer and views start over after a move, as before:
       // they have little noise to hide, and nothing to reproject them by.
@@ -1702,6 +1801,9 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {
     // so this is exactly the plain average, tone mapped, as in C1.
     let rest = count - record.noiseFree.a;
     return vec4f(screenColor(record.light.rgb / max(rest, 1.0), record.noiseFree, count), 1.0);
+  }
+  if (frame.view == VIEW_DISCARDED) {
+    return vec4f(fateColor(), 1.0);
   }
   if (frame.view == VIEW_HISTORY) {
     // On the rays view's doubling scale, by the square root, so it reaches

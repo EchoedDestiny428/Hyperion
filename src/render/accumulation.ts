@@ -4,10 +4,12 @@ import type { FrameParams } from './frame-uniforms.ts';
 // Progressive accumulation. While nothing changes, frames add samples to a
 // running total per pixel on the GPU, and the screen shows the average, so
 // the image keeps getting smoother. Anything that changes what the image
-// shows (canvas size, sun, renderer, view, scene, sliders) starts the total
-// over. Moving the camera doesn't: each pixel carries on from where its point
-// was last frame (reprojection, in tracer.wgsl), so only what just came into
-// view starts over.
+// shows (canvas size, renderer, view, scene, sliders) starts the total over.
+// Moving the camera doesn't: each pixel carries on from where its point was
+// last frame (reprojection, in tracer.wgsl), so only what just came into view
+// starts over. Nor does the sun moving: each pixel keeps a short history and
+// throws it away where the light has clearly changed (tracer.wgsl's
+// changedLight).
 
 // The sample-count choices in the Anti-aliasing menu, like games' "4x" or
 // "16x" supersampling. The image stops refining at the chosen count, and
@@ -23,7 +25,7 @@ export const SLOW_PACE_MS = 250; // 4 samples per second
 // Everything the image depends on, apart from which sample this is. The
 // last frame's camera isn't part of the picture, only of how it got there.
 // How much history a moving camera keeps doesn't change a still picture.
-export type ImageInputs = Omit<FrameParams, 'sampleIndex' | 'previousCamera' | 'cameraMoved' | 'maxHistory'>;
+export type ImageInputs = Omit<FrameParams, 'sampleIndex' | 'previousCamera' | 'cameraMoved' | 'maxHistory' | 'lightChanged'>;
 
 export interface SampleCounter {
   // Samples since the picture last started over. Moving the camera doesn't
@@ -34,8 +36,9 @@ export interface SampleCounter {
   // limit and pace count, so a picture always refines again after a move.
   readonly still: number;
   readonly moved: boolean; // the camera moved since the frame before (set by check())
+  readonly lit: boolean; // the light changed (the sun moved) since the frame before
   // Starts the picture over if what it shows has changed since last frame,
-  // and notes whether the camera moved.
+  // and notes whether the camera moved or the light changed.
   check(inputs: ImageInputs, scene: Scene): void;
   // Claims the next sample and returns its index, `held` before counting it
   // (0 = the shader starts over instead of adding to the history).
@@ -46,10 +49,12 @@ export interface SampleCounter {
 export function createSampleCounter(): SampleCounter {
   let previousKey = '';
   let previousCamera = '';
+  let previousTime: number | null = null;
   let previousScene: Scene | null = null;
   let held = 0;
   let still = 0;
   let moved = false;
+  let lit = false;
   return {
     get held() {
       return held;
@@ -60,10 +65,14 @@ export function createSampleCounter(): SampleCounter {
     get moved() {
       return moved;
     },
+    get lit() {
+      return lit;
+    },
     check(inputs, scene) {
       // Comparing the JSON text compares every field, including any added
       // to FrameParams later. It's a few hundred characters per frame.
-      const { camera, ...picture } = inputs;
+      // The sun's position comes from timeSeconds.
+      const { camera, timeSeconds, ...picture } = inputs;
       const key = JSON.stringify(picture);
       const cameraKey = JSON.stringify(camera);
       if (key !== previousKey || scene !== previousScene) {
@@ -73,8 +82,10 @@ export function createSampleCounter(): SampleCounter {
         still = 0;
       }
       moved = previousCamera !== '' && cameraKey !== previousCamera;
+      lit = previousTime !== null && timeSeconds !== previousTime;
       previousCamera = cameraKey;
-      if (moved) still = 0;
+      previousTime = timeSeconds;
+      if (moved || lit) still = 0;
     },
     take() {
       still++;

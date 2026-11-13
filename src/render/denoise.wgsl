@@ -38,6 +38,7 @@ struct Frame {
   // The camera the last frame was drawn with, to find where each point was
   // on screen then (its motion vector). The same as above while it's still.
   previousCameraPos: vec3f,
+  lightChanged: u32, // 1 if the light changed since the last frame (the sun moved): history is kept short and checked
   previousCameraRight: vec3f,
   previousCameraUp: vec3f,
   previousCameraForward: vec3f,
@@ -322,7 +323,8 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
 const YOUNG_REACH_MOVING = 3; // 7×7
 fn neighborVariance(pixel: vec2u, size: vec2u, g: Guide, n: f32) -> f32 {
   let c = centerOf(pixel, g);
-  let reach = select(1, YOUNG_REACH_MOVING, frame.cameraMoved != 0u);
+  let changing = frame.cameraMoved != 0u || frame.lightChanged != 0u;
+  let reach = select(1, YOUNG_REACH_MOVING, changing);
   var weights = 0.0;
   var sum = 0.0;
   var sumOfSquares = 0.0;
@@ -361,7 +363,7 @@ fn neighborVariance(pixel: vec2u, size: vec2u, g: Guide, n: f32) -> f32 {
   }
   let mean = sum / weights;
   let differences = max(sumOfSquares / weights - mean * mean, 0.0);
-  if (frame.cameraMoved == 0u || spreadWeights < 0.5) {
+  if (!changing || spreadWeights < 0.5) {
     return differences;
   }
   return max(differences, spreads / spreadWeights / max(n, 1.0));

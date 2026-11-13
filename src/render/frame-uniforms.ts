@@ -11,7 +11,7 @@ import type { CameraBasis } from '../camera/orbit.ts';
 //                        12..14 cameraForward 15 renderer (u32)
 //                        16..17 resolution   18 view (u32)   19 sampleIndex (u32)
 //                        20 maxBounces (u32)  21 exposure  22 cameraMoved (u32)  23 maxHistory
-//                        24..26 previousCameraPos      27 padding
+//                        24..26 previousCameraPos      27 lightChanged (u32)
 //                        28..30 previousCameraRight    31 padding
 //                        32..34 previousCameraUp       35 padding
 //                        36..38 previousCameraForward  39 padding
@@ -33,6 +33,7 @@ export interface FrameParams {
   previousCamera: CameraBasis; // the last frame's camera; `camera` again on the first frame
   cameraMoved: boolean; // camera isn't previousCamera, so pixels look up their history where their point was
   maxHistory: number; // while moving, history counts as at most this many samples; 0 = none (historyCap in settings.ts)
+  lightChanged: boolean; // the sun moved since the last frame drawn, so history is kept short and checked
 }
 
 export function packFrameUniforms(
@@ -62,6 +63,7 @@ export function packFrameUniforms(
   ints[22] = p.cameraMoved ? 1 : 0;
   out[23] = p.maxHistory;
   out.set(p.previousCamera.position, 24);
+  ints[27] = p.lightChanged ? 1 : 0;
   out.set(p.previousCamera.right, 28);
   out.set(p.previousCamera.up, 32);
   out.set(p.previousCamera.forward, 36);

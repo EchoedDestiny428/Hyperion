@@ -8,8 +8,9 @@
 //   npm run motion -- --against benchmarks/before    compare the two
 //
 // Options: --scene <name> (default motion-test), --spin <degrees per frame>
-// (default 0.5) or --walk <meters per frame> (moves the fly camera forward
-// instead), --frames <list> (default 20,60), --denoise <list> (Denoise
+// (default 0.5), or --walk <meters per frame> (moves the fly camera forward
+// instead), or --sun <degrees per frame> (turns the sun, camera still),
+// --frames <list> (default 20,60), --denoise <list> (Denoise
 // slider levels, default 0,2), --history <list> (History slider values, each
 // with every Denoise level; default: the app's own), --save <folder> (keeps
 // every picture).
@@ -50,13 +51,16 @@ const shot = async (page: Page): Promise<Shot> => {
 
 // A camera move: which kind, and how far per frame.
 interface Move {
-  kind: 'spin' | 'walk';
+  kind: 'spin' | 'walk' | 'sun';
   step: number;
 }
 
+// The address option that starts a still reference where the move ends.
+const START_OPTION = { spin: 'turn', walk: 'ahead', sun: 'sunturn' } as const;
+
 // The clean, still picture of the view the move reaches after `frames` frames.
 async function reference(page: Page, url: string, scene: string, move: Move, frames: number): Promise<Shot> {
-  await openScene(page, url, scene, { [move.kind === 'spin' ? 'turn' : 'ahead']: String(frames * move.step) });
+  await openScene(page, url, scene, { [START_OPTION[move.kind]]: String(frames * move.step) });
   await pick(page, 'Renderer', 'path');
   await pick(page, 'Samples', String(REFERENCE_SAMPLES));
   await slide(page, 'Denoise', 0);
@@ -102,6 +106,7 @@ async function main(): Promise<void> {
       scene: { type: 'string', default: 'motion-test' },
       spin: { type: 'string' },
       walk: { type: 'string' },
+      sun: { type: 'string' },
       frames: { type: 'string', default: '20,60' },
       denoise: { type: 'string', default: '0,2' },
       history: { type: 'string' },
@@ -111,11 +116,12 @@ async function main(): Promise<void> {
   });
   const scene = values.scene;
   if (!SCENES.some((s) => s.name === scene)) throw new Error(`No scene named "${scene}". Scenes: ${SCENES.map((s) => s.name).join(', ')}.`);
-  if (values.spin !== undefined && values.walk !== undefined) throw new Error('Use --spin or --walk, not both.');
-  const move: Move =
-    values.walk !== undefined ? { kind: 'walk', step: Number(values.walk) } : { kind: 'spin', step: Number(values.spin ?? '0.5') };
+  const chosen = (['spin', 'walk', 'sun'] as const).filter((kind) => values[kind] !== undefined);
+  if (chosen.length > 1) throw new Error('Use only one of --spin, --walk and --sun.');
+  const kind = chosen[0] ?? 'spin';
+  const move: Move = { kind, step: Number(values[kind] ?? '0.5') };
   if (!Number.isFinite(move.step) || move.step === 0) {
-    throw new Error(`--${move.kind} ${String(values.walk ?? values.spin)} isn't a number per frame other than 0.`);
+    throw new Error(`--${kind} ${String(values[kind])} isn't a number per frame other than 0.`);
   }
   const frameCounts = values.frames.split(',').map(Number);
   for (const frames of frameCounts) {
@@ -175,7 +181,7 @@ async function main(): Promise<void> {
       console.error(`${frames} frames: done`);
     }
     console.log(
-      `${scene}, path tracer, ${WIDTH}×${HEIGHT}, ${move.kind === 'spin' ? `turning ${move.step}°` : `walking ${move.step} m`} per frame, ${await powerState(page)}. ` +
+      `${scene}, path tracer, ${WIDTH}×${HEIGHT}, ${{ spin: `turning ${move.step}°`, walk: `walking ${move.step} m`, sun: `the sun turning ${move.step}°` }[move.kind]} per frame, ${await powerState(page)}. ` +
         `Error: typical difference per pixel from a still ${REFERENCE_SAMPLES}-sample picture of the same view, in screen values 0–255.\n`,
     );
     console.log(rows.join('\n'));
