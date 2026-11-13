@@ -20,7 +20,7 @@ For whoever picks this up next, human or agent. Updated 2026-11-10 at the end of
 
 Each needing approval first:
 
-1. The temporal steps, in the order under "Order of the temporal steps" in `docs/PLAN.md`. Sessions 1 to 3 (groundwork, reprojection and rejection, fading history) are done. Next: decide whether the two session 3 experiments are worth trying (sharper history lookups, history that depends on motion; see the plan), then session 4, the denoiser on moving views. Session 4 also covers the noisy band at the screen's edge and behind columns: smooth pixels with little history harder. Measure every step with `npm run motion` against the numbers below.
+1. The temporal steps, in the order under "Order of the temporal steps" in `docs/PLAN.md`. Sessions 1 to 3 (groundwork, reprojection and rejection, fading history) are done. Session 3's two experiments were tried and dropped (below). Next: session 4, the denoiser on moving views. Session 4 also covers the noisy band at the screen's edge and behind columns: smooth pixels with little history harder. Measure every step with `npm run motion` against the numbers below.
 2. Optional, for the denoiser: glossy reflections and glass, which it still smooths as part of the surface they're seen on (steps 6 and 7); and fireflies, which it spreads into blobs.
 3. Optional: retest "any hit" shadow rays now that there's a BVH, since a shadow ray could stop walking the tree at its first blocker.
 
@@ -112,7 +112,7 @@ Moving views after session 2 (reprojection; history capped at 4 samples while mo
 
 Moving views, `npm run motion` (`motion-test`, 640×400, 0.5° per frame, against a still 1,024-sample picture of the same view), baseline before any temporal reuse (2026-11-11): error 17.3 / 15.6 at frames 20 / 60, 6.2 / 5.6 with Denoise 2. That's the same as a single still sample, as it should be, since every moving frame starts over. The two copies of the records cost light scenes 0.1 to 0.35 ms per sample on the RTX 4060 (+16% to +34%); heavier scenes show no clear change.
 
-Tried and dropped, so don't repeat without a reason: "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
+Tried and dropped, so don't repeat without a reason: Catmull-Rom history lookups and a history cap that follows motion (2026-11-13, C2 note section 23; neither beat the plain 2×2 blend with a fixed cap once the denoiser is on); "any hit" shadow rays (no gain in open scenes; retest with a BVH), separate shaders per renderer (no clear gain even in the best case), and removing the frame cap to steady the benchmark (noise got much worse).
 
 ## Where things live
 
