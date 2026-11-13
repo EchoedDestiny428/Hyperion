@@ -71,3 +71,10 @@ test('the Samples menu limits the history too', () => {
   assert.equal(historyCap({ ...settings, sampleLimit: 4 }), 3); // 3 carried over + 1 new = 4
   assert.equal(historyCap({ ...settings, sampleLimit: 1 }), 0); // "1 (none)": no reuse at all
 });
+
+test('a moving camera gets one more denoise pass, but off stays off', () => {
+  const settings = { ...defaultSettings(), denoise: 2 };
+  assert.equal(denoiseLevel(settings, true), 3);
+  assert.equal(denoiseLevel({ ...settings, denoise: 0 }, true), 0);
+  assert.equal(denoiseLevel({ ...settings, denoise: MAX_DENOISE_LEVEL }, true), MAX_DENOISE_LEVEL);
+});

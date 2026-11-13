@@ -151,7 +151,7 @@ Also done along the way:
 3. *Fading history* (step 5; done 2026-11-11): a History slider (0 to 64 samples carried over while moving, default 4); the HUD says what moving pixels hold; the Samples menu caps the history too; `npm run motion -- --history`. Two experiments followed it (2026-11-13), and both were dropped, since `npm run motion` showed no real gain (C2 note, section 23):
    - sharper history lookups, a 4×4 Catmull-Rom blend instead of the 2×2 one: 2–5% better with the denoiser, slightly worse without, for 4× the history reads;
    - a history that depends on how fast the view moves: worse with the denoiser at every speed tried.
-4. *The denoiser on moving views:* variance from each pixel's history; *proposed:* feeding the first filter pass back into history, if `npm run motion` says it helps.
+4. *The denoiser on moving views* (done 2026-11-13): a scripted walk to measure the dreamspace; pixels that just came into view borrow their neighbors' noise level; one more filter pass while moving. Feeding the first filter pass back into history was tried and dropped (worse on both tests). Measuring showed most of the remaining moving error isn't in newly revealed pixels: the dreamspace walk is limited by noise, `motion-test` by blur.
 5. *Responding to change* (step 8): variance clipping, and "Sun moves" keeping history.
 6. *Wrap-up:* the remaining debug views (step 10), the learning note, and whether glossy reflections and glass (steps 6–7) come next.
 

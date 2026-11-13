@@ -298,22 +298,38 @@ fn prepare(@builtin(global_invocation_id) id: vec3u) {
     let brightnessOfColor = luminance(albedo);
     variance = spread / n / (brightnessOfColor * brightnessOfColor);
   } else {
-    variance = neighborVariance(id.xy, size, g);
+    variance = neighborVariance(id.xy, size, g, n);
   }
   illuminationOut[slot] = vec4f(mean / albedo, variance);
 }
 
-// How much the illumination differs between this pixel and its 3×3
-// neighbors on the same surface. Real detail counts as noise here too, so
-// it overestimates, which only matters for the first few samples. (It reads
-// the records, since the packed guides are being written at the same time.)
-fn neighborVariance(pixel: vec2u, size: vec2u, g: Guide) -> f32 {
+// How noisy a pixel with fewer than MIN_SAMPLES_FOR_VARIANCE samples is,
+// judged from its neighbors on the same surface. (It reads the records,
+// since the packed guides are being written at the same time.)
+//
+// Standing still, every pixel is that young for the first few samples, and
+// this is how much the illumination differs across the 3×3 pixels around.
+// Real detail counts as noise there too, so it overestimates, briefly.
+//
+// Moving, a young pixel is one that just came into view, among neighbors
+// that have history. Their averages are already smooth, so how much they
+// differ says little about this pixel's single sample. What carries over is
+// how noisy one *sample* is there, which each neighbor's history measures
+// (its spread of brightness). So a young pixel borrows that, divided by its
+// own few samples, from a wider 7×7 area. That makes the filter smooth the
+// band along the screen's edge and the strips behind moving edges as hard
+// as their few samples need, as SVGF does.
+const YOUNG_REACH_MOVING = 3; // 7×7
+fn neighborVariance(pixel: vec2u, size: vec2u, g: Guide, n: f32) -> f32 {
   let c = centerOf(pixel, g);
+  let reach = select(1, YOUNG_REACH_MOVING, frame.cameraMoved != 0u);
   var weights = 0.0;
   var sum = 0.0;
   var sumOfSquares = 0.0;
-  for (var dy = -1; dy <= 1; dy++) {
-    for (var dx = -1; dx <= 1; dx++) {
+  var spreadWeights = 0.0;
+  var spreads = 0.0;
+  for (var dy = -reach; dy <= reach; dy++) {
+    for (var dx = -reach; dx <= reach; dx++) {
       let q = vec2i(pixel) + vec2i(dx, dy);
       if (any(q < vec2i(0)) || any(q >= vec2i(size))) {
         continue;
@@ -328,14 +344,27 @@ fn neighborVariance(pixel: vec2u, size: vec2u, g: Guide) -> f32 {
         let like = likeness(c, guideOf(neighbor, record), neighbor, inverseSqrt(f32(dx * dx + dy * dy)));
         w = like.facing * exp(-like.difference);
       }
-      let l = luminance(record.light.rgb / restCount(record) / albedoOf(record));
+      let rest = restCount(record);
+      let colorBrightness = luminance(albedoOf(record));
+      let l = luminance(record.light.rgb / rest / albedoOf(record));
       weights += w;
       sum += w * l;
       sumOfSquares += w * l * l;
+      if (rest >= f32(MIN_SAMPLES_FOR_VARIANCE)) {
+        // One sample's spread there, in illumination: as in prepare.
+        let brightness = luminance(record.light.rgb / rest);
+        let spread = max(record.light.a / rest - brightness * brightness, 0.0) * rest / (rest - 1.0);
+        spreadWeights += w;
+        spreads += w * spread / (colorBrightness * colorBrightness);
+      }
     }
   }
   let mean = sum / weights;
-  return max(sumOfSquares / weights - mean * mean, 0.0);
+  let differences = max(sumOfSquares / weights - mean * mean, 0.0);
+  if (frame.cameraMoved == 0u || spreadWeights < 0.5) {
+    return differences;
+  }
+  return max(differences, spreads / spreadWeights / max(n, 1.0));
 }
 
 // ---- 2. À-trous filter ---------------------------------------------------

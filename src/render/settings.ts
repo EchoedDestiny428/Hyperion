@@ -104,8 +104,16 @@ export const MAX_DENOISE_LEVEL = 10;
 // The passes the image actually gets. Only the path tracer's lit image is
 // denoised: the Whitted renderer has no noise to remove, and smoothing a
 // debug view would hide what it's there to show.
-export function denoiseLevel(s: RenderSettings): number {
-  return s.renderer === 'path' && s.view === 'final' ? s.denoise : 0;
+//
+// While the camera moves, one more pass than the slider says. A moving
+// frame holds only a few samples per pixel, so it's limited by noise, which
+// a wider filter removes; a still picture soon has little noise left, and
+// there an extra pass mostly smears. On the dreamspace walk (npm run motion
+// -- --scene dreamspace --walk 0.02), 3 passes had 8% less error than 2; on
+// stills, 2 was best (checked on 2026-11-13).
+export function denoiseLevel(s: RenderSettings, moving = false): number {
+  if (s.renderer !== 'path' || s.view !== 'final' || s.denoise === 0) return 0;
+  return moving ? Math.min(s.denoise + 1, MAX_DENOISE_LEVEL) : s.denoise;
 }
 
 // How far from a pixel, in pixels, `level` passes can gather light: each

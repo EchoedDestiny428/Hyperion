@@ -3,7 +3,7 @@
 
 import { type Fly, attachFlyControls, flyBasis, flyFromOrbit, moveFly, orbitFromFly } from './camera/fly.ts';
 import { type CameraBasis, type Orbit, attachOrbitControls, orbitBasis, spinOrbit } from './camera/orbit.ts';
-import { parseSpin, spinYaw } from './camera/spin.ts';
+import { parseCameraPath, spinYaw, walkPosition } from './camera/path.ts';
 import { trackCanvasSize } from './gpu/canvas.ts';
 import { createDevice, describeAdapter, shouldRestart } from './gpu/device.ts';
 import { createGpuTimer, firstAndLast } from './gpu/timer.ts';
@@ -59,20 +59,27 @@ const flyControls = attachFlyControls(
   () => setCameraMode('fly'), // pressing W, A, S, D, Q or E while orbiting
 );
 
-// ?spin= and ?turn= (camera/spin.ts): a camera move that's the same every
-// time, for scripts/motion.ts. P starts it, or starts it again. It always
-// uses the orbit camera, starting from the scene's view.
-const { spin, problems: spinProblems } = parseSpin(location.search);
-for (const problem of spinProblems) console.warn(`[spin] ${problem}`);
-const spinStartYaw = orbit.yaw;
-let spinStep: number | null = null; // frames turned since P was pressed; null before
-if (spin) {
-  settings.cameraMode = 'orbit';
-  orbit.yaw = spinYaw(spinStartYaw, spin, 0);
-  canvas.dataset['spin'] = 'ready';
+// ?spin=, ?walk=, ?turn= and ?ahead= (camera/path.ts): a camera move that's
+// the same every time, for scripts/motion.ts. P starts it, or starts it
+// again. A spin turns the orbit camera and a walk moves the fly camera, both
+// starting from the scene's view.
+const { path, problems: pathProblems } = parseCameraPath(location.search);
+for (const problem of pathProblems) console.warn(`[camera path] ${problem}`);
+const pathStartYaw = orbit.yaw;
+const pathStartFly = { position: fly.position, yaw: fly.yaw };
+let pathStep: number | null = null; // frames moved since P was pressed; null before
+if (path) {
+  settings.cameraMode = path.kind === 'spin' ? 'orbit' : 'fly';
+  placeOnPath(0);
+  canvas.dataset['path'] = 'ready';
   window.addEventListener('keydown', (event) => {
-    if (event.code === 'KeyP' && spin.degreesPerFrame !== 0) spinStep = 0;
+    if (event.code === 'KeyP' && path.step !== 0) pathStep = 0;
   });
+}
+
+function placeOnPath(step: number): void {
+  if (path?.kind === 'spin') orbit.yaw = spinYaw(pathStartYaw, path, step);
+  else if (path?.kind === 'walk') fly.position = walkPosition(pathStartFly, path, step);
 }
 
 // The panel's buttons raise these flags, and the next frame acts on them.
@@ -176,15 +183,15 @@ async function start(): Promise<void> {
     if (settings.cameraMode === 'fly') Object.assign(fly, moveFly(fly, flyControls.input(), seconds));
     else Object.assign(orbit, spinOrbit(orbit, orbitControls.input(), seconds));
 
-    // A spin turns one step for each frame drawn. Once it has turned all its
-    // frames it holds the last picture, without refining it, so a script
-    // can take it as it was while moving.
-    const spinHeld = spin !== null && spinStep !== null && spinStep >= spin.frames;
-    if (spin && spinStep !== null && !spinHeld) {
-      spinStep++;
-      orbit.yaw = spinYaw(spinStartYaw, spin, spinStep);
+    // A camera path moves one step for each frame drawn. Once it has moved
+    // all its frames it holds the last picture, without refining it, so a
+    // script can take it as it was while moving.
+    const pathHeld = path !== null && pathStep !== null && pathStep >= path.frames;
+    if (path && pathStep !== null && !pathHeld) {
+      pathStep++;
+      placeOnPath(pathStep);
     }
-    if (spin) canvas.dataset['spin'] = spinHeld ? 'done' : spinStep === null ? 'ready' : 'turning';
+    if (path) canvas.dataset['path'] = pathHeld ? 'done' : pathStep === null ? 'ready' : 'moving';
 
     const inputs = {
       camera: settings.cameraMode === 'fly' ? flyBasis(fly) : orbitBasis(orbit),
@@ -214,7 +221,7 @@ async function start(): Promise<void> {
     // moved on a finished image (which redraws it from the samples it holds,
     // without adding one). Otherwise skip the GPU work: without a new
     // texture from getCurrentTexture(), the canvas keeps showing the last image.
-    const level = denoiseLevel(settings);
+    const level = denoiseLevel(settings, samples.moved);
     // What the denoiser needs to know about the image, once this frame's sample is in.
     const image = (passes: number): FilterInputs => ({
       generation,
@@ -225,7 +232,7 @@ async function start(): Promise<void> {
     const addSample = samples.still < target;
     const output = pass.output();
     const redenoise = !addSample && level !== shownLevel && output !== null;
-    if (!spinHeld && (addSample || redenoise)) {
+    if (!pathHeld && (addSample || redenoise)) {
       // Record GPU commands into an encoder, then submit them as one batch.
       const encoder = device.createCommandEncoder({ label: 'frame' });
       const canvasView = context.getCurrentTexture().createView();
@@ -268,7 +275,7 @@ async function start(): Promise<void> {
     hud.frame(now, {
       renderer: RENDERER_TEXT[settings.renderer],
       gpuTimes: timer ? timer.times : null,
-      camera: settings.cameraMode === 'fly' ? `Fly · ${fly.speed.toFixed(1)} m/s` : `Orbit${spinText()}`,
+      camera: (settings.cameraMode === 'fly' ? `Fly · ${fly.speed.toFixed(1)} m/s` : 'Orbit') + pathText(),
       width: canvas.width,
       height: canvas.height,
       samples: samples.still,
@@ -304,11 +311,11 @@ function reusesHistory(s: typeof settings): boolean {
   return s.renderer === 'path' && (s.view === 'final' || s.view === 'history');
 }
 
-// The HUD's note on a spin: how far it has got, or how to start it.
-function spinText(): string {
-  if (!spin || spin.degreesPerFrame === 0) return '';
-  const total = Number.isFinite(spin.frames) ? `/${spin.frames}` : '';
-  return spinStep === null ? ' · press P to spin' : ` · spin ${spinStep}${total}`;
+// The HUD's note on a camera path: how far it has got, or how to start it.
+function pathText(): string {
+  if (!path || path.step === 0) return '';
+  const total = Number.isFinite(path.frames) ? `/${path.frames}` : '';
+  return pathStep === null ? ` · press P to ${path.kind}` : ` · ${path.kind} ${pathStep}${total}`;
 }
 
 // ?scene=<name> picks the layout. An unknown name falls back to the default

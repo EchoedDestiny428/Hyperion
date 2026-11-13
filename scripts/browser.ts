@@ -162,7 +162,7 @@ export async function serve(outDir: string, missing: string): Promise<{ url: str
 }
 
 // Opens a scene in a fresh page, so nothing from the last one carries over.
-// `options` adds to the address, such as { spin: '0.5' } (camera/spin.ts).
+// `options` adds to the address, such as { spin: '0.5' } (camera/path.ts).
 export async function openScene(page: Page, url: string, scene: string, options: Record<string, string> = {}): Promise<void> {
   const loaded = page.waitFor('Page.loadEventFired');
   const query = new URLSearchParams({ scene, ...options });
